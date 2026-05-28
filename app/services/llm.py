@@ -1,0 +1,39 @@
+import dashscope
+from dashscope import Generation
+
+from app.config import settings
+
+dashscope.api_key = settings.dashscope_api_key
+
+SYSTEM_PROMPT = """你是生命健康领域企业知识助手。请基于提供的参考资料回答问题。
+
+要求：
+1. 只基于提供的资料回答，不要编造信息。
+2. 每个事实性结论必须标注来源编号，格式为 [1]、[2] 等。
+3. 如果资料不足以回答问题，请明确说明。
+4. 涉及诊疗、用药、患者相关问题时，必须提醒：本系统不替代专业医疗建议。
+5. 回答使用中文。
+"""
+
+
+def generate_stream(
+    query: str,
+    context: str,
+    messages: list[dict] | None = None,
+):
+    """Stream generation with context. Returns a Response object for streaming."""
+    system_msg = SYSTEM_PROMPT + "\n\n参考资料：\n" + context
+
+    msg_list = messages or []
+    full_messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": query},
+    ] + msg_list
+
+    return Generation.call(
+        model=settings.llm_model,
+        messages=full_messages,
+        result_format="message",
+        stream=True,
+        incremental_output=True,
+    )
