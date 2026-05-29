@@ -1,4 +1,4 @@
-.PHONY: install migrate init start worker start-all stop
+.PHONY: install migrate migrate-up init-db init-weaviate start worker start-all stop frontend-install frontend-dev frontend-build
 
 install:
 	pip install -e ".[dev]"
@@ -29,3 +29,12 @@ start-all:
 stop:
 	pkill -f uvicorn || true
 	pkill -f celery || true
+
+frontend-install:
+	cd frontend && npm install
+
+frontend-dev:
+	cd frontend && npm run dev
+
+frontend-build:
+	cd frontend && npm run build
