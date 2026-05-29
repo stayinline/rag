@@ -35,8 +35,10 @@ COLLECTION_PROPERTIES = [
     wc.Property(name="document_type", data_type=wc.DataType.TEXT, index_filterable=True),
     wc.Property(name="domain_tags", data_type=wc.DataType.TEXT_ARRAY, index_filterable=True),
     wc.Property(name="entities", data_type=wc.DataType.TEXT_ARRAY, index_filterable=True),
+    wc.Property(name="publication_date", data_type=wc.DataType.DATE),
     wc.Property(name="embedding_model", data_type=wc.DataType.TEXT, index_filterable=True),
     wc.Property(name="created_at", data_type=wc.DataType.DATE),
+    wc.Property(name="section_type", data_type=wc.DataType.TEXT, index_filterable=True),
 ]
 
 

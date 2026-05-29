@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
+    # Phase 2: SCI Paper & Domain Enhancement
+    grobid_url: str = "http://localhost:8070"
+    reranker_type: str = "bm25"  # bm25, mock, or bge
+    reranker_top_n: int = 10  # Number of candidates after reranking
+    query_expansion: bool = True  # Enable medical term expansion
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

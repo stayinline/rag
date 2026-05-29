@@ -20,6 +20,7 @@ class Document(Base, UUIDMixin, TimestampMixin):
     content_hash = Column(String(64))
     metadata_ = Column("metadata", JSONB, default=dict)
     created_by = Column(UUID(as_uuid=True), nullable=False)
+    document_type = Column(String(50), default="general")  # general, paper, sop, guideline
     deleted_at = Column(DateTime(timezone=True))
 
 

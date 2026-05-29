@@ -48,6 +48,11 @@ def mock_settings():
         mock.return_value.rag_top_k = 10
         mock.return_value.celery_broker_url = "redis://localhost:6379/15"
         mock.return_value.celery_result_backend = "redis://localhost:6379/15"
+        # Phase 2 settings
+        mock.return_value.grobid_url = "http://localhost:8070"
+        mock.return_value.reranker_type = "mock"
+        mock.return_value.reranker_top_n = 5
+        mock.return_value.query_expansion = True
         yield mock
 
 

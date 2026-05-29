@@ -27,6 +27,7 @@ class DocumentResponse(BaseModel):
     status: str
     security_level: str
     created_by: UUID
+    document_type: str = "general"
     created_at: datetime
     updated_at: datetime
 
