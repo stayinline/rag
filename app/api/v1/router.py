@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.v1.analytics import router as analytics_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.ingestion import router as ingestion_router
@@ -14,3 +15,4 @@ router.include_router(ingestion_router, prefix="/api/v1")
 router.include_router(chat_router, prefix="/api/v1")
 router.include_router(search_router, prefix="/api/v1")
 router.include_router(papers_router, prefix="/api/v1")
+router.include_router(analytics_router, prefix="/api/v1")

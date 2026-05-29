@@ -53,6 +53,9 @@ def mock_settings():
         mock.return_value.reranker_type = "mock"
         mock.return_value.reranker_top_n = 5
         mock.return_value.query_expansion = True
+        # Phase 3 settings
+        mock.return_value.clickhouse_url = "http://localhost:8123"
+        mock.return_value.enable_trace_logging = True
         yield mock
 
 
@@ -191,4 +194,9 @@ def test_kb_id():
 
 @pytest.fixture
 def test_document_id():
+    return str(uuid.uuid4())
+
+
+@pytest.fixture
+def test_trace_id():
     return str(uuid.uuid4())

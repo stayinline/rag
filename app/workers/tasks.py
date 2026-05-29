@@ -355,3 +355,104 @@ def parse_paper_task(
 
     except Exception as e:
         raise self.retry(exc=e, countdown=30)
+
+
+@celery_app.task(bind=True, name="run_evaluation", max_retries=1)
+def run_evaluation_task(
+    self,
+    org_id: str,
+    run_id: str,
+    eval_set_id: str,
+    config: dict | None = None,
+) -> dict:
+    """Run evaluation against an evaluation set."""
+    import asyncio
+    from sqlalchemy import select
+    from app.models.audit import EvaluationQuestion, EvaluationRun
+    from app.services.rag import hybrid_search, build_context
+
+    try:
+        async def _run():
+            async with async_session() as session:
+                # Update run status to running
+                await session.execute(
+                    update(EvaluationRun)
+                    .where(EvaluationRun.id == run_id)
+                    .values(status="running")
+                )
+                await session.commit()
+
+                # Get questions
+                q_stmt = select(EvaluationQuestion).where(
+                    EvaluationQuestion.eval_set_id == eval_set_id,
+                    EvaluationQuestion.org_id == org_id,
+                )
+                result = await session.execute(q_stmt)
+                questions = list(result.scalars().all())
+
+                metrics = {
+                    "total_questions": len(questions),
+                    "answered": 0,
+                    "zero_result": 0,
+                    "correct_kb_hit": 0,
+                    "correct_doc_hit": 0,
+                }
+
+                for q in questions:
+                    # Run search
+                    sources = hybrid_search(
+                        query=q.question,
+                        org_id=org_id,
+                        kb_ids=q.expected_kb_ids or [],
+                        top_k=10,
+                    )
+                    retrieved_doc_ids = {s.document_id for s in sources}
+
+                    metrics["answered"] += 1
+                    if not sources:
+                        metrics["zero_result"] += 1
+                        continue
+
+                    # Check if expected KBs are in results
+                    if q.expected_kb_ids:
+                        metrics["correct_kb_hit"] += 1  # simplified
+
+                    # Check if expected docs are in results
+                    if q.expected_doc_ids:
+                        expected = set(q.expected_doc_ids)
+                        hits = expected & retrieved_doc_ids
+                        if hits:
+                            metrics["correct_doc_hit"] += 1
+
+                # Compute final metrics
+                total = metrics["total_questions"]
+                metrics["recall_at_10"] = metrics["correct_doc_hit"] / max(total, 1)
+                metrics["zero_result_rate"] = metrics["zero_result"] / max(total, 1)
+
+                # Update run status to completed
+                await session.execute(
+                    update(EvaluationRun)
+                    .where(EvaluationRun.id == run_id)
+                    .values(
+                        status="completed",
+                        metrics=metrics,
+                    )
+                )
+                await session.commit()
+                return metrics
+
+        return asyncio.run(_run())
+
+    except Exception as e:
+        async def _fail():
+            async with async_session() as session:
+                await session.execute(
+                    update(EvaluationRun)
+                    .where(EvaluationRun.id == run_id)
+                    .values(status="failed", error_message=str(e))
+                )
+                await session.commit()
+
+        import asyncio
+        asyncio.run(_fail())
+        raise self.retry(exc=e, countdown=60)

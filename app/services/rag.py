@@ -1,14 +1,15 @@
-from urllib.parse import urlparse
+import time
 import uuid
-
-import weaviate
-from weaviate.classes.query import Filter
+import logging
 
 from app.config import settings
 from app.services.llm import generate_stream
 from app.services.weaviate_client import COLLECTION_NAME, get_client
+from weaviate.classes.query import Filter
 from app.services.query_rewriter import rewrite_query
 from app.services.reranker import get_reranker
+
+logger = logging.getLogger(__name__)
 
 
 class RAGSource:
@@ -42,14 +43,16 @@ class RAGSource:
         }
 
 
-def _build_where_filter(org_id: str, kb_ids: list[str]) -> Filter:
-    """Build Weaviate where filter with mandatory tenant and status constraints."""
+def _build_where_filter(org_id: str, kb_ids: list[str], security_levels: list[str] | None = None) -> Filter:
+    """Build Weaviate where filter with mandatory tenant, status, and security constraints."""
     conditions = [
         Filter.by_property("org_id").equal(org_id),
         Filter.by_property("status").equal("ready"),
     ]
     if kb_ids:
         conditions.append(Filter.by_property("kb_id").contains_any(kb_ids))
+    if security_levels:
+        conditions.append(Filter.by_property("security_level").contains_any(security_levels))
     return Filter.all_of(conditions)
 
 
@@ -76,12 +79,16 @@ def hybrid_search(
     kb_ids: list[str],
     top_k: int = settings.rag_top_k,
     expand_query: bool = False,
+    trace: object = None,
 ) -> list[RAGSource]:
     """Hybrid search with permission filters and optional query expansion."""
+    t0 = time.monotonic()
     queries = [query]
     if expand_query and getattr(settings, "query_expansion", True):
         rewrite_result = rewrite_query(query)
         queries = rewrite_result.expanded
+        if trace:
+            trace.add_step("rewrite", details={"rewrite_count": len(queries)})
 
     client = get_client()
     client.connect()
@@ -108,14 +115,19 @@ def hybrid_search(
                     score = metadata.get("score", 0.0) if metadata else 0.0
                     all_results.append(_weaviate_to_source(obj, score))
 
-        return all_results[:top_k]
+        results = all_results[:top_k]
+        duration_ms = (time.monotonic() - t0) * 1000
+        if trace:
+            trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
+        return results
 
     finally:
         client.close()
 
 
-def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = None) -> list[RAGSource]:
+def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = None, trace: object = None) -> list[RAGSource]:
     """Rerank sources using the configured reranker."""
+    t0 = time.monotonic()
     if not sources:
         return sources
 
@@ -131,6 +143,9 @@ def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = Non
         source.score = r.score
         reranked.append(source)
 
+    duration_ms = (time.monotonic() - t0) * 1000
+    if trace:
+        trace.add_step("rerank", duration_ms=duration_ms, details={"reranked_count": len(reranked)})
     return reranked
 
 
@@ -156,25 +171,38 @@ def assemble_context_and_generate(
     org_id: str,
     kb_ids: list[str],
     max_chunks: int = settings.rag_max_chunks,
+    user_id: str = "",
 ):
     """Full RAG pipeline: query rewrite -> search -> rerank -> context -> stream generate.
     Yields (delta, is_done, sources) dicts.
     """
+    import asyncio
+    from app.services.rag_trace import trace_collector
+    from app.services.clickhouse import clickhouse_client
+
     trace_id = str(uuid.uuid4())
+    t_start = time.monotonic()
+
+    # Start trace
+    trace = trace_collector.start_trace(trace_id, org_id, user_id or "anonymous", query, kb_ids)
 
     # Step 1: Hybrid search with optional query expansion
-    sources = hybrid_search(query, org_id, kb_ids, top_k=settings.rag_top_k, expand_query=True)
+    sources = hybrid_search(query, org_id, kb_ids, top_k=settings.rag_top_k, expand_query=True, trace=trace)
 
     # Step 2: Rerank
-    sources = rerank_sources(query, sources)
+    sources = rerank_sources(query, sources, trace=trace)
 
     # Step 3: Truncate to max_chunks
     sources = sources[:max_chunks]
 
     # Step 4: Build context
     context, citations = build_context(sources)
+    if trace:
+        trace.add_step("context", details={"source_count": len(sources)})
 
     if not context.strip():
+        trace.total_latency_ms = (time.monotonic() - t_start) * 1000
+        _write_trace_to_clickhouse(trace)
         yield {
             "delta": "未找到相关的参考资料，无法回答此问题。",
             "done": True,
@@ -184,6 +212,7 @@ def assemble_context_and_generate(
         return
 
     # Step 5: Generate answer (streaming)
+    t_gen_start = time.monotonic()
     response = generate_stream(query=query, context=context)
 
     accumulated = ""
@@ -199,9 +228,28 @@ def assemble_context_and_generate(
                     "sources": [],
                 }
 
+    gen_duration_ms = (time.monotonic() - t_gen_start) * 1000
+    if trace:
+        trace.add_step("generation", duration_ms=gen_duration_ms)
+
+    trace.total_latency_ms = (time.monotonic() - t_start) * 1000
+    _write_trace_to_clickhouse(trace)
+
     yield {
         "delta": "",
         "done": True,
         "trace_id": trace_id,
         "sources": [s.to_dict() for s in sources],
     }
+
+
+def _write_trace_to_clickhouse(trace):
+    """Write trace to ClickHouse asynchronously."""
+    if not getattr(settings, "enable_trace_logging", True):
+        return
+    try:
+        event = trace.to_clickhouse_event()
+        import asyncio
+        asyncio.create_task(clickhouse_client.write_trace_event(event))
+    except Exception as e:
+        logger.warning("Failed to write trace to ClickHouse: %s", e)

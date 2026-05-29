@@ -7,7 +7,9 @@
       "Bash(pip show:*)",
       "Bash(pip uninstall:*)",
       "Bash(python -m pytest tests/test_paper_parser.py tests/test_metadata_enhancer.py tests/test_paper_chunker.py tests/test_reranker.py tests/test_query_rewriter.py tests/test_rag_v2.py tests/test_api_papers.py -v --tb=short)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)"
     ]
   }
 }

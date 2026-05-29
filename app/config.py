@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     reranker_top_n: int = 10  # Number of candidates after reranking
     query_expansion: bool = True  # Enable medical term expansion
 
+    # Phase 3: Analytics & Quality
+    clickhouse_url: str = "http://localhost:8123"
+    enable_trace_logging: bool = True  # Enable RAG trace logging to ClickHouse
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

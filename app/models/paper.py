@@ -1,5 +1,5 @@
-from sqlalchemy import Column, String, Text, Integer, Float, DateTime, Array
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, String, Text, Integer, Float, DateTime
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
@@ -21,11 +21,11 @@ class Paper(Base, UUIDMixin, TimestampMixin):
     abstract = Column(Text)
 
     # Medical subject terms
-    mesh_terms = Column(Array(String(100)))  # MeSH terms
-    diseases = Column(Array(String(200)))
-    drugs = Column(Array(String(200)))
-    targets = Column(Array(String(200)))
-    genes = Column(Array(String(100)))
+    mesh_terms = Column(ARRAY(String(100)))  # MeSH terms
+    diseases = Column(ARRAY(String(200)))
+    drugs = Column(ARRAY(String(200)))
+    targets = Column(ARRAY(String(200)))
+    genes = Column(ARRAY(String(100)))
 
     # Study design
     study_type = Column(String(100))  # RCT, cohort, case-control, review, etc.
