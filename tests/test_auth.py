@@ -1,6 +1,6 @@
 """Tests for auth module."""
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 
 from app.auth import (
     create_access_token,

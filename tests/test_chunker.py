@@ -1,5 +1,4 @@
 """Tests for chunker service."""
-from unittest.mock import patch
 
 from app.services.chunker import chunk_text, count_tokens
 

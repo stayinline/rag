@@ -1,12 +1,11 @@
 """Tests for Search API endpoint."""
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services.rag import RAGSource
 
 
 def test_search_with_results(test_client):
-    org_id = str(uuid.uuid4())
     doc_id = str(uuid.uuid4())
     source = RAGSource(
         chunk_id="c1",

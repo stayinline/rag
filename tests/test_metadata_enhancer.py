@@ -1,5 +1,4 @@
 """Tests for metadata enhancement service."""
-import pytest
 from unittest.mock import patch, MagicMock
 
 from app.services.metadata_enhancer import (

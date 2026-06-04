@@ -5,6 +5,14 @@ import sys
 sys.path.insert(0, ".")
 
 from app.models.base import Base
+# Import all models so they are registered with Base.metadata
+import app.models.tenant  # noqa: F401
+import app.models.kb  # noqa: F401
+import app.models.document  # noqa: F401
+import app.models.audit  # noqa: F401
+import app.models.chunk  # noqa: F401
+import app.models.task  # noqa: F401
+import app.models.paper  # noqa: F401
 from app.database import engine
 
 

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_current_user
+from app.config import settings
 from app.schemas.chat import ChatRequest, ChatStreamChunk
 from app.services.rag import assemble_context_and_generate
 
@@ -55,6 +56,6 @@ async def create_chat(
             "trace_id": trace_id or "",
             "conversation_id": str(data.conversation_id) if data.conversation_id else None,
             "sources": sources,
-            "model": "qwen-plus",
+            "model": settings.llm_model,
             "prompt_version": "v1",
         }

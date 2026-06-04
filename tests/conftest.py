@@ -1,8 +1,6 @@
 """Shared test fixtures."""
-import os
 import tempfile
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,6 +34,7 @@ def mock_settings():
         mock.return_value.database_url = "sqlite+aiosqlite:///./test.db"
         mock.return_value.redis_url = "redis://localhost:6379/15"
         mock.return_value.weaviate_url = "http://localhost:8080"
+        mock.return_value.weaviate_grpc_port = 50051
         mock.return_value.dashscope_api_key = "test-api-key"
         mock.return_value.llm_model = "qwen-plus"
         mock.return_value.embedding_model = "text-embedding-v3"
@@ -62,9 +61,9 @@ def mock_settings():
 @pytest.fixture
 def mock_dashscope():
     """Mock DashScope API calls."""
-    with patch("app.services.embedding.dashscope") as mock_ds, \
+    with patch("app.services.embedding.dashscope"), \
          patch("app.services.embedding.TextEmbedding") as mock_embed, \
-         patch("app.services.llm.dashscope") as mock_ds_llm, \
+         patch("app.services.llm.dashscope"), \
          patch("app.services.llm.Generation") as mock_gen:
         embed_resp = MagicMock()
         embed_resp.status_code = 200

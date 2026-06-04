@@ -15,7 +15,7 @@ async def test_get_current_user_valid_token():
 
     with patch("app.api.deps.get_current_user_from_token") as mock:
         mock.return_value = {"user_id": user_id, "org_id": org_id, "roles": ["admin"]}
-        user = await get_current_user(f"Bearer test-token")
+        user = await get_current_user("Bearer test-token")
         assert user["user_id"] == user_id
         assert user["org_id"] == org_id
 

@@ -1,6 +1,6 @@
 """Tests for Chat API endpoint."""
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def test_chat_stream(test_client):
@@ -25,7 +25,9 @@ def test_chat_stream(test_client):
 
 
 def test_chat_non_stream(test_client):
-    with patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen:
+    with patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen, \
+         patch("app.api.v1.chat.settings") as mock_settings:
+        mock_settings.llm_model = "configured-chat-model"
         mock_gen.return_value = iter([
             {"delta": "RAG", "done": False, "trace_id": "t1", "sources": []},
             {"delta": " is useful.", "done": False, "trace_id": "t1", "sources": []},
@@ -46,6 +48,7 @@ def test_chat_non_stream(test_client):
     assert "RAG is useful." in data["answer"]
     assert data["trace_id"] == "t1"
     assert len(data["sources"]) == 1
+    assert data["model"] == "configured-chat-model"
 
 
 def test_chat_with_kb_ids(test_client):

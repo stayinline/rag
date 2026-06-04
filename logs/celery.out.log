@@ -1,0 +1,25 @@
+ 
+ -------------- celery@LAPTOP-RQ9R8M6R v5.6.3 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-10-10.0.26200-SP0 2026-06-04 15:39:58
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         rag_workers:0x284ae15ea90
+- ** ---------- .> transport:   redis://:**@192.168.1.124:6379/0
+- ** ---------- .> results:     redis://:**@192.168.1.124:6379/0
+- *** --- * --- .> concurrency: 18 (solo)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> celery           exchange=celery(direct) key=celery
+                
+
+[tasks]
+  . chunk_and_embed
+  . chunk_and_embed_from_parse
+  . parse_document
+  . parse_paper
+  . publish_document
+  . publish_document_from_chunks
+  . run_evaluation
+

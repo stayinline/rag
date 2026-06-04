@@ -1,9 +1,10 @@
 """Tests for paper API endpoints."""
 import uuid
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
+from app.models.document import DocumentVersion
 from tests.conftest import make_mock_session
 
 
@@ -136,3 +137,47 @@ class TestPaperSchemas:
         )
         assert data.title == "Uploaded Paper"
         assert data.status == "draft"
+
+
+def test_upload_paper_uses_configured_storage_and_embedding_model(papers_client, tmp_path):
+    client = papers_client
+
+    from app.database import get_db
+    from app.main import app
+
+    added_objects = []
+
+    class Session:
+        def add(self, obj):
+            added_objects.append(obj)
+
+        async def commit(self):
+            return None
+
+    async def db_override():
+        yield Session()
+
+    app.dependency_overrides[get_db] = db_override
+    kb_id = str(uuid.uuid4())
+    try:
+        with patch("app.api.v1.papers.settings") as mock_settings, \
+         patch("app.workers.celery_app.celery_app.send_task") as mock_send_task:
+            mock_settings.storage_path = str(tmp_path)
+            mock_settings.embedding_model = "configured-embedding-model"
+
+            response = client.post(
+                "/api/v1/papers/upload",
+                data={"kb_id": kb_id},
+                files={"file": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    version = next(obj for obj in added_objects if isinstance(obj, DocumentVersion))
+    assert version.embedding_model == "configured-embedding-model"
+    assert str(tmp_path) in version.storage_path
+    mock_send_task.assert_called_once()
+    assert mock_send_task.call_args.args[0] == "parse_paper"
+    sent_args = mock_send_task.call_args.kwargs["args"]
+    assert sent_args[-1] == kb_id

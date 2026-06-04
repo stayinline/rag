@@ -1,5 +1,4 @@
 """Tests for RAG pipeline v2 with reranking and query rewriting."""
-import pytest
 from unittest.mock import patch, MagicMock
 
 from app.services.rag import (
@@ -62,7 +61,6 @@ class TestRAGSourceV2:
 
 class TestBuildWhereFilter:
     def test_without_kb_ids(self):
-        from weaviate.classes.query import Filter
         where = _build_where_filter("org1", [])
         assert where is not None
 
@@ -111,7 +109,6 @@ class TestRerankSources:
         assert reranked[0].document_title == "Doc2"
 
     def test_reranking_respects_top_n(self):
-        from app.config import settings
         sources = [
             RAGSource(f"c{i}", f"d{i}", f"Doc{i}", None, None, None, 0.5, f"content {i}")
             for i in range(10)

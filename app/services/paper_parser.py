@@ -1,5 +1,4 @@
 """SCI PDF paper parser with GROBID integration and local fallback."""
-import json
 import re
 import logging
 from dataclasses import dataclass, field

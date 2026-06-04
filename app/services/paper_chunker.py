@@ -1,7 +1,7 @@
 """Section-aware chunking for scientific papers."""
 from app.config import settings
 from app.services.chunker import count_tokens
-from app.services.paper_parser import PaperParseResult, PaperSection
+from app.services.paper_parser import PaperParseResult
 
 
 # Section importance for retrieval boosting

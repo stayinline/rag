@@ -114,28 +114,34 @@ def test_parse_file_docx():
 def test_parse_pdf():
     """Test PDF parsing with PyMuPDF."""
     import fitz
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+    fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    try:
         doc = fitz.open()
         page = doc.new_page()
         page.insert_text((50, 50), "Hello from PDF")
-        doc.save(f.name)
+        doc.save(pdf_path)
         doc.close()
 
-        text = parse_pdf(f.name)
+        text = parse_pdf(pdf_path)
         assert "Hello from PDF" in text
-    os.unlink(f.name)
+    finally:
+        os.unlink(pdf_path)
 
 
 def test_parse_file_pdf():
     """Test parse_file with PDF."""
     import fitz
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+    fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    try:
         doc = fitz.open()
         page = doc.new_page()
         page.insert_text((50, 50), "PDF test content")
-        doc.save(f.name)
+        doc.save(pdf_path)
         doc.close()
 
-        text = parse_file(f.name)
+        text = parse_file(pdf_path)
         assert "PDF test content" in text
-    os.unlink(f.name)
+    finally:
+        os.unlink(pdf_path)

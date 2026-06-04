@@ -1,18 +1,17 @@
-from urllib.parse import urlparse
-
 import weaviate
 import weaviate.classes.config as wc
+from weaviate.connect import ConnectionParams
 from weaviate.classes.config import Configure
 
 from app.config import settings
 
 
 def get_client() -> weaviate.WeaviateClient:
-    parsed = urlparse(settings.weaviate_url)
-    return weaviate.connect_to_local(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 8080,
-        http_secure=parsed.scheme == "https",
+    return weaviate.WeaviateClient(
+        connection_params=ConnectionParams.from_url(
+            settings.weaviate_url,
+            grpc_port=settings.weaviate_grpc_port,
+        ),
     )
 
 

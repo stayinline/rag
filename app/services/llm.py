@@ -33,7 +33,9 @@ def generate_stream(
     return Generation.call(
         model=settings.llm_model,
         messages=full_messages,
+        api_key=settings.dashscope_api_key or None,
         result_format="message",
         stream=True,
         incremental_output=True,
+        request_timeout=settings.llm_timeout,
     )

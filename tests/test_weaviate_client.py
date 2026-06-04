@@ -45,7 +45,21 @@ def test_ensure_collection_skips_existing():
 
 
 def test_get_client(mock_settings):
-    with patch("app.services.weaviate_client.weaviate.connect_to_local") as mock:
-        mock.return_value = MagicMock()
+    with patch("app.services.weaviate_client.ConnectionParams") as mock_params, \
+         patch("app.services.weaviate_client.weaviate.WeaviateClient") as mock_client_cls, \
+         patch("app.services.weaviate_client.settings") as mock_settings:
+        mock_settings.weaviate_url = "http://configured-weaviate:18080"
+        mock_settings.weaviate_grpc_port = 50052
+        connection_params = MagicMock()
+        mock_params.from_url.return_value = connection_params
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
         client = get_client()
-        mock.assert_called_once()
+
+        mock_params.from_url.assert_called_once_with(
+            "http://configured-weaviate:18080",
+            grpc_port=50052,
+        )
+        mock_client_cls.assert_called_once_with(connection_params=connection_params)
+        assert client is mock_client

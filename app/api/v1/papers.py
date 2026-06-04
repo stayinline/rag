@@ -1,13 +1,12 @@
 """Paper Intelligence API endpoints."""
 import os
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
+from app.config import settings
 from app.database import get_db
 from app.models.document import Document, DocumentVersion
 from app.models.paper import Paper
@@ -15,7 +14,6 @@ from app.models.task import IngestionJob
 from app.schemas.paper import (
     DoiImportRequest,
     PmidImportRequest,
-    PaperCreate,
     PaperEvidenceResponse,
     PaperReferencesResponse,
     PaperResponse,
@@ -40,9 +38,9 @@ async def upload_paper(
     org_id = str(user["org_id"])
 
     # Save uploaded file
-    os.makedirs(os.path.join("./data/files", org_id, kb_id), exist_ok=True)
+    os.makedirs(os.path.join(settings.storage_path, org_id, kb_id), exist_ok=True)
     filename = f"{uuid.uuid4()}_{file.filename}"
-    storage_path = os.path.join("./data/files", org_id, kb_id, filename)
+    storage_path = os.path.join(settings.storage_path, org_id, kb_id, filename)
 
     with open(storage_path, "wb") as f:
         content = await file.read()
@@ -52,7 +50,7 @@ async def upload_paper(
     version_id = uuid.uuid4()
 
     # Create Document record
-    session = await db.__anext__()
+    session = db
     doc = Document(
         id=document_id,
         org_id=org_id,
@@ -78,7 +76,7 @@ async def upload_paper(
         version=1,
         storage_path=storage_path,
         parser_version="paper_parser_v1",
-        embedding_model="text-embedding-v3",
+        embedding_model=settings.embedding_model,
         index_status="pending",
     )
     session.add(version)
@@ -114,8 +112,8 @@ async def upload_paper(
     # Kick off Celery task
     from app.workers.celery_app import celery_app
     celery_app.send_task(
-        "parse_paper_task",
-        args=[org_id, str(document_id), str(version_id), str(paper_id), storage_path, doi, pmid],
+        "parse_paper",
+        args=[org_id, str(document_id), str(version_id), str(paper_id), storage_path, doi, pmid, kb_id],
     )
 
     return PaperUploadResponse(
@@ -181,7 +179,7 @@ async def get_paper(
     db=Depends(get_db),
 ):
     """Get structured paper details."""
-    session = await db.__anext__()
+    session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -195,7 +193,7 @@ async def get_paper_evidence(
     db=Depends(get_db),
 ):
     """Get PICO / evidence summary for a paper."""
-    session = await db.__anext__()
+    session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -226,7 +224,7 @@ async def get_paper_references(
     db=Depends(get_db),
 ):
     """Get references cited by a paper."""
-    session = await db.__anext__()
+    session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -248,7 +246,7 @@ async def get_similar_papers(
     db=Depends(get_db),
 ):
     """Find similar papers based on MeSH terms and domain tags."""
-    session = await db.__anext__()
+    session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
         raise HTTPException(status_code=404, detail="Paper not found")

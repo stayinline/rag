@@ -11,9 +11,20 @@ from app.database import get_db
 from app.models.document import Document, DocumentVersion
 from app.models.task import IngestionJob
 from app.schemas.document import DocumentListResponse, DocumentResponse
-from app.workers.tasks import parse_document_task
+from app.workers.tasks import chunk_and_embed_from_parse_task, parse_document_task, publish_document_from_chunks_task
 
 router = APIRouter(prefix="", tags=["documents"])
+
+
+def make_document_ingestion_key(
+    org_id: str,
+    document_id: str,
+    version_id: str,
+    job_type: str,
+    content_hash: str,
+) -> str:
+    raw_key = f"{org_id}:{document_id}:{version_id}:{job_type}:{content_hash}"
+    return f"{job_type}:{uuid.uuid5(uuid.NAMESPACE_URL, raw_key)}"
 
 
 @router.post("/kbs/{kb_id}/documents", response_model=DocumentResponse, status_code=201)
@@ -57,6 +68,7 @@ async def upload_document(
         file_name=file.filename,
         file_type=file_ext.lstrip("."),
         content_hash=content_hash,
+        document_type="general",
         created_by=user["user_id"],
     )
     db.add(document)
@@ -79,19 +91,33 @@ async def upload_document(
         document_id=document.id,
         version_id=version.id,
         job_type="parse",
-        idempotency_key=f"{user['org_id']}:{document.id}:{version.id}:parse:{content_hash}",
+        idempotency_key=make_document_ingestion_key(
+            org_id=str(user["org_id"]),
+            document_id=str(document.id),
+            version_id=str(version.id),
+            job_type="parse",
+            content_hash=content_hash,
+        ),
     )
     db.add(job)
     await db.commit()
     await db.refresh(document)
 
-    # Kick off Celery parse task
-    parse_document_task.delay(
-        org_id=str(user["org_id"]),
-        document_id=str(document.id),
-        version_id=str(version.id),
-        storage_path=file_path,
+    # Kick off the full ingestion pipeline: parse -> chunk/embed -> publish.
+    ingestion_chain = (
+        parse_document_task.s(
+            org_id=str(user["org_id"]),
+            document_id=str(document.id),
+            version_id=str(version.id),
+            storage_path=file_path,
+        )
+        | chunk_and_embed_from_parse_task.s(
+            kb_id=str(kb_id),
+            title=document.title,
+        )
+        | publish_document_from_chunks_task.s()
     )
+    ingestion_chain.delay()
 
     return document
 

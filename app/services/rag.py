@@ -3,9 +3,10 @@ import uuid
 import logging
 
 from app.config import settings
+from app.services.embedding import embed_text
 from app.services.llm import generate_stream
 from app.services.weaviate_client import COLLECTION_NAME, get_client
-from weaviate.classes.query import Filter
+from weaviate.classes.query import Filter, MetadataQuery
 from app.services.query_rewriter import rewrite_query
 from app.services.reranker import get_reranker
 
@@ -73,6 +74,14 @@ def _weaviate_to_source(obj, score: float) -> RAGSource:
     )
 
 
+def _metadata_score(metadata) -> float:
+    if not metadata:
+        return 0.0
+    if isinstance(metadata, dict):
+        return metadata.get("score") or 0.0
+    return getattr(metadata, "score", None) or 0.0
+
+
 def hybrid_search(
     query: str,
     org_id: str,
@@ -100,19 +109,20 @@ def hybrid_search(
         seen_ids = set()
 
         for q in queries:
+            query_vector = embed_text(q)
             response = collection.query.hybrid(
                 query=q,
+                vector=query_vector,
                 filters=where,
                 limit=top_k,
                 alpha=0.5,
-                return_metadata={"score"},
+                return_metadata=MetadataQuery(score=True),
             )
             for obj in response.objects:
                 obj_uuid = str(obj.uuid)
                 if obj_uuid not in seen_ids:
                     seen_ids.add(obj_uuid)
-                    metadata = obj.metadata or {}
-                    score = metadata.get("score", 0.0) if metadata else 0.0
+                    score = _metadata_score(obj.metadata)
                     all_results.append(_weaviate_to_source(obj, score))
 
         results = all_results[:top_k]
@@ -176,9 +186,7 @@ def assemble_context_and_generate(
     """Full RAG pipeline: query rewrite -> search -> rerank -> context -> stream generate.
     Yields (delta, is_done, sources) dicts.
     """
-    import asyncio
     from app.services.rag_trace import trace_collector
-    from app.services.clickhouse import clickhouse_client
 
     trace_id = str(uuid.uuid4())
     t_start = time.monotonic()
@@ -248,8 +256,17 @@ def _write_trace_to_clickhouse(trace):
     if not getattr(settings, "enable_trace_logging", True):
         return
     try:
-        event = trace.to_clickhouse_event()
         import asyncio
-        asyncio.create_task(clickhouse_client.write_trace_event(event))
+
+        from app.services.clickhouse import clickhouse_client
+
+        event = trace.to_clickhouse_event()
+        coro = clickhouse_client.write_trace_event(event)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coro)
+        else:
+            loop.create_task(coro)
     except Exception as e:
         logger.warning("Failed to write trace to ClickHouse: %s", e)

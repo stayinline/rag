@@ -4,8 +4,8 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.kb import KBCreate, KBUpdate, KBResponse
-from app.schemas.document import DocumentResponse, IngestionJobResponse, DocumentVersionInfo
+from app.schemas.kb import KBCreate, KBUpdate
+from app.schemas.document import IngestionJobResponse, DocumentVersionInfo
 from app.schemas.chat import ChatRequest, ChatSource, ChatResponse, ChatStreamChunk
 from app.schemas.search import SearchRequest, SearchResultItem, SearchResponse
 

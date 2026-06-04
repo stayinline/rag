@@ -99,7 +99,9 @@ def test_build_context_multiple_sources():
 
 def test_hybrid_search_empty_results():
     org_id = str(uuid.uuid4())
-    with patch("app.services.rag.get_client") as mock_client:
+    with patch("app.services.rag.get_client") as mock_client, \
+         patch("app.services.rag.embed_text") as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
         mock_w = MagicMock()
         mock_collection = MagicMock()
         mock_w.collections.get = MagicMock(return_value=mock_collection)
@@ -110,13 +112,18 @@ def test_hybrid_search_empty_results():
 
         results = hybrid_search("test query", org_id, [])
         assert results == []
+        call_kwargs = mock_collection.query.hybrid.call_args.kwargs
+        assert not isinstance(call_kwargs["return_metadata"], set)
+        assert call_kwargs["vector"] == [0.1] * 1536
 
 
 def test_hybrid_search_with_results():
     org_id = str(uuid.uuid4())
     kb_id = str(uuid.uuid4())
 
-    with patch("app.services.rag.get_client") as mock_client:
+    with patch("app.services.rag.get_client") as mock_client, \
+         patch("app.services.rag.embed_text") as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
         mock_w = MagicMock()
         mock_collection = MagicMock()
         mock_w.collections.get = MagicMock(return_value=mock_collection)
@@ -153,6 +160,37 @@ def test_hybrid_search_with_results():
         assert results[0].document_title == "Test Document"
         assert results[0].score == 0.85
         assert results[0].page_start == 1
+
+
+def test_hybrid_search_reads_object_metadata_score():
+    org_id = str(uuid.uuid4())
+
+    with patch("app.services.rag.get_client") as mock_client, \
+         patch("app.services.rag.embed_text") as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
+        mock_w = MagicMock()
+        mock_collection = MagicMock()
+        mock_w.collections.get = MagicMock(return_value=mock_collection)
+
+        mock_obj = MagicMock()
+        mock_obj.uuid = uuid.uuid4()
+        mock_obj.properties = {
+            "document_id": "doc-1",
+            "content": "Search content",
+            "title": "Doc",
+        }
+        mock_obj.metadata = MagicMock()
+        mock_obj.metadata.score = 0.72
+
+        mock_response = MagicMock()
+        mock_response.objects = [mock_obj]
+        mock_collection.query.hybrid = MagicMock(return_value=mock_response)
+        mock_client.return_value = mock_w
+
+        results = hybrid_search("test query", org_id, [], top_k=5)
+
+        assert len(results) == 1
+        assert results[0].score == 0.72
 
 
 def test_assemble_context_and_generate_no_results():

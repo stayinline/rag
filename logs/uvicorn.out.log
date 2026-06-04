@@ -1,0 +1,85 @@
+INFO:     127.0.0.1:64388 - "GET /health HTTP/1.1" 200 OK
+2026-06-04 15:41:15,140 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-06-04 15:41:15,142 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-06-04 15:41:15,159 INFO sqlalchemy.engine.Engine select current_schema()
+2026-06-04 15:41:15,160 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-06-04 15:41:15,188 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-06-04 15:41:15,190 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-06-04 15:41:15,208 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:41:15,222 INFO sqlalchemy.engine.Engine SELECT users.org_id, users.email, users.username, users.hashed_password, users.is_active, users.roles, users.id, users.created_at, users.updated_at 
+FROM users 
+WHERE users.username = $1::VARCHAR
+2026-06-04 15:41:15,222 INFO sqlalchemy.engine.Engine [generated in 0.00068s] ('admin',)
+INFO:     127.0.0.1:58503 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+2026-06-04 15:41:15,308 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-04 15:41:33,776 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:41:33,778 INFO sqlalchemy.engine.Engine SELECT users.org_id, users.email, users.username, users.hashed_password, users.is_active, users.roles, users.id, users.created_at, users.updated_at 
+FROM users 
+WHERE users.username = $1::VARCHAR
+2026-06-04 15:41:33,778 INFO sqlalchemy.engine.Engine [cached since 18.56s ago] ('admin',)
+INFO:     127.0.0.1:60046 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+2026-06-04 15:41:33,804 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:60046 - "POST /api/v1/chat HTTP/1.1" 200 OK
+2026-06-04 15:44:29,882 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:44:29,889 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+FROM (SELECT knowledge_bases.org_id AS org_id, knowledge_bases.name AS name, knowledge_bases.description AS description, knowledge_bases.is_active AS is_active, knowledge_bases.created_by AS created_by, knowledge_bases.deleted_at AS deleted_at, knowledge_bases.id AS id, knowledge_bases.created_at AS created_at, knowledge_bases.updated_at AS updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL) AS anon_1
+2026-06-04 15:44:29,890 INFO sqlalchemy.engine.Engine [generated in 0.00089s] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+2026-06-04 15:44:29,899 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.org_id, knowledge_bases.name, knowledge_bases.description, knowledge_bases.is_active, knowledge_bases.created_by, knowledge_bases.deleted_at, knowledge_bases.id, knowledge_bases.created_at, knowledge_bases.updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL ORDER BY knowledge_bases.created_at DESC
+2026-06-04 15:44:29,900 INFO sqlalchemy.engine.Engine [generated in 0.00095s] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+INFO:     127.0.0.1:50691 - "GET /api/v1/kbs HTTP/1.1" 200 OK
+2026-06-04 15:44:29,909 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-04 15:44:29,918 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:44:29,923 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+FROM (SELECT knowledge_bases.org_id AS org_id, knowledge_bases.name AS name, knowledge_bases.description AS description, knowledge_bases.is_active AS is_active, knowledge_bases.created_by AS created_by, knowledge_bases.deleted_at AS deleted_at, knowledge_bases.id AS id, knowledge_bases.created_at AS created_at, knowledge_bases.updated_at AS updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL) AS anon_1
+2026-06-04 15:44:29,924 INFO sqlalchemy.engine.Engine [cached since 0.03415s ago] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+2026-06-04 15:44:30,159 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.org_id, knowledge_bases.name, knowledge_bases.description, knowledge_bases.is_active, knowledge_bases.created_by, knowledge_bases.deleted_at, knowledge_bases.id, knowledge_bases.created_at, knowledge_bases.updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL ORDER BY knowledge_bases.created_at DESC
+2026-06-04 15:44:30,160 INFO sqlalchemy.engine.Engine [generated in 0.00170s] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+INFO:     127.0.0.1:50694 - "GET /api/v1/kbs HTTP/1.1" 200 OK
+2026-06-04 15:44:30,164 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-04 15:44:31,479 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:44:31,482 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+FROM (SELECT documents.org_id AS org_id, documents.kb_id AS kb_id, documents.title AS title, documents.file_name AS file_name, documents.file_type AS file_type, documents.source_type AS source_type, documents.source_uri AS source_uri, documents.current_version AS current_version, documents.status AS status, documents.security_level AS security_level, documents.content_hash AS content_hash, documents.metadata AS metadata, documents.created_by AS created_by, documents.document_type AS document_type, documents.deleted_at AS deleted_at, documents.id AS id, documents.created_at AS created_at, documents.updated_at AS updated_at 
+FROM documents 
+WHERE documents.kb_id = $1::UUID AND documents.org_id = $2::UUID AND documents.deleted_at IS NULL) AS anon_1
+2026-06-04 15:44:31,483 INFO sqlalchemy.engine.Engine [generated in 0.00087s] ('78e58ef7-bda5-4bf1-9c83-de2d2ade47bb', '302fbebe-8655-4d12-a672-49e873cbb0f2')
+2026-06-04 15:44:31,494 INFO sqlalchemy.engine.Engine SELECT documents.org_id, documents.kb_id, documents.title, documents.file_name, documents.file_type, documents.source_type, documents.source_uri, documents.current_version, documents.status, documents.security_level, documents.content_hash, documents.metadata, documents.created_by, documents.document_type, documents.deleted_at, documents.id, documents.created_at, documents.updated_at 
+FROM documents 
+WHERE documents.kb_id = $1::UUID AND documents.org_id = $2::UUID AND documents.deleted_at IS NULL ORDER BY documents.created_at DESC 
+ LIMIT $3::INTEGER
+2026-06-04 15:44:31,495 INFO sqlalchemy.engine.Engine [generated in 0.00046s] ('78e58ef7-bda5-4bf1-9c83-de2d2ade47bb', '302fbebe-8655-4d12-a672-49e873cbb0f2', 50)
+INFO:     127.0.0.1:64643 - "GET /api/v1/kbs/78e58ef7-bda5-4bf1-9c83-de2d2ade47bb/documents HTTP/1.1" 200 OK
+2026-06-04 15:44:31,506 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-04 15:44:36,023 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:44:36,025 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+FROM (SELECT knowledge_bases.org_id AS org_id, knowledge_bases.name AS name, knowledge_bases.description AS description, knowledge_bases.is_active AS is_active, knowledge_bases.created_by AS created_by, knowledge_bases.deleted_at AS deleted_at, knowledge_bases.id AS id, knowledge_bases.created_at AS created_at, knowledge_bases.updated_at AS updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL) AS anon_1
+2026-06-04 15:44:36,026 INFO sqlalchemy.engine.Engine [cached since 6.136s ago] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+2026-06-04 15:44:36,032 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.org_id, knowledge_bases.name, knowledge_bases.description, knowledge_bases.is_active, knowledge_bases.created_by, knowledge_bases.deleted_at, knowledge_bases.id, knowledge_bases.created_at, knowledge_bases.updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL ORDER BY knowledge_bases.created_at DESC
+2026-06-04 15:44:36,033 INFO sqlalchemy.engine.Engine [cached since 5.874s ago] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+INFO:     127.0.0.1:58854 - "GET /api/v1/kbs HTTP/1.1" 200 OK
+2026-06-04 15:44:36,038 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-04 15:44:36,047 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-04 15:44:36,048 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+FROM (SELECT knowledge_bases.org_id AS org_id, knowledge_bases.name AS name, knowledge_bases.description AS description, knowledge_bases.is_active AS is_active, knowledge_bases.created_by AS created_by, knowledge_bases.deleted_at AS deleted_at, knowledge_bases.id AS id, knowledge_bases.created_at AS created_at, knowledge_bases.updated_at AS updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL) AS anon_1
+2026-06-04 15:44:36,049 INFO sqlalchemy.engine.Engine [cached since 6.16s ago] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+2026-06-04 15:44:36,067 INFO sqlalchemy.engine.Engine SELECT knowledge_bases.org_id, knowledge_bases.name, knowledge_bases.description, knowledge_bases.is_active, knowledge_bases.created_by, knowledge_bases.deleted_at, knowledge_bases.id, knowledge_bases.created_at, knowledge_bases.updated_at 
+FROM knowledge_bases 
+WHERE knowledge_bases.org_id = $1::UUID AND knowledge_bases.deleted_at IS NULL ORDER BY knowledge_bases.created_at DESC
+2026-06-04 15:44:36,067 INFO sqlalchemy.engine.Engine [cached since 5.909s ago] ('302fbebe-8655-4d12-a672-49e873cbb0f2',)
+INFO:     127.0.0.1:58856 - "GET /api/v1/kbs HTTP/1.1" 200 OK
+2026-06-04 15:44:36,072 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58114 - "POST /api/v1/search HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54453 - "POST /api/v1/chat HTTP/1.1" 200 OK

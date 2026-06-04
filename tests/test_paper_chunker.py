@@ -1,5 +1,4 @@
 """Tests for paper-specific chunker."""
-import pytest
 
 from app.services.paper_chunker import (
     chunk_paper,

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import update
 
+from app.config import settings
 from app.database import async_session
 from app.models.chunk import DocumentChunk
 from app.models.document import Document, DocumentVersion
@@ -11,7 +12,7 @@ from app.services.chunker import chunk_text
 from app.services.embedding import embed_texts
 from app.services.file_parser import parse_file
 from app.services.paper_chunker import chunk_paper
-from app.services.paper_parser import parse_paper_local, paper_to_chunkable_text, paper_references_to_text
+from app.services.paper_parser import parse_paper_local, paper_references_to_text
 from app.services.metadata_enhancer import enhance_via_crossref, enhance_via_pubmed, extract_medical_entities
 from app.services.weaviate_client import COLLECTION_NAME, get_client
 from app.workers.celery_app import celery_app
@@ -30,7 +31,6 @@ def parse_document_task(
     storage_path: str,
 ) -> dict:
     """Parse uploaded file and extract text."""
-    from app.config import settings
     import os
 
     try:
@@ -103,7 +103,7 @@ def chunk_and_embed_task(
                     "document_type": "general",
                     "domain_tags": [],
                     "entities": [],
-                    "embedding_model": "text-embedding-v3",
+                    "embedding_model": settings.embedding_model,
                     "created_at": datetime.now(timezone.utc),
                     "section_type": None,
                 }
@@ -125,6 +125,29 @@ def chunk_and_embed_task(
         finally:
             client.close()
 
+    except Exception as e:
+        raise self.retry(exc=e, countdown=60)
+
+
+@celery_app.task(bind=True, name="chunk_and_embed_from_parse", max_retries=3)
+def chunk_and_embed_from_parse_task(
+    self,
+    parse_result: dict,
+    kb_id: str,
+    title: str,
+    batch_size: int = 10,
+) -> dict:
+    """Continue a document ingestion chain after parsing."""
+    try:
+        return chunk_and_embed_task(
+            parse_result["org_id"],
+            parse_result["document_id"],
+            parse_result["version_id"],
+            kb_id,
+            title,
+            parse_result["parsed_path"],
+            batch_size,
+        )
     except Exception as e:
         raise self.retry(exc=e, countdown=60)
 
@@ -192,6 +215,22 @@ def publish_document_task(
         raise self.retry(exc=e, countdown=30)
 
 
+@celery_app.task(bind=True, name="publish_document_from_chunks", max_retries=1)
+def publish_document_from_chunks_task(self, embed_result: dict) -> dict:
+    """Publish a document after chunking and embedding has completed."""
+    try:
+        return publish_document_task(
+            embed_result["org_id"],
+            embed_result["document_id"],
+            embed_result["version_id"],
+            embed_result["kb_id"],
+            embed_result["chunk_count"],
+            embed_result["chunk_ids"],
+        )
+    except Exception as e:
+        raise self.retry(exc=e, countdown=30)
+
+
 @celery_app.task(bind=True, name="parse_paper", max_retries=3)
 def parse_paper_task(
     self,
@@ -202,13 +241,13 @@ def parse_paper_task(
     storage_path: str,
     doi: str | None = None,
     pmid: str | None = None,
+    kb_id: str | None = None,
 ) -> dict:
     """Parse a SCI PDF paper, enhance metadata, chunk, and embed."""
     try:
         # Step 1: Parse the PDF
         parse_result = parse_paper_local(storage_path)
         if doi:
-            from app.services.paper_parser import PaperParseResult
             crossref_meta = enhance_via_crossref(doi)
             if crossref_meta:
                 if not parse_result.title and crossref_meta.title:
@@ -231,11 +270,15 @@ def parse_paper_task(
 
         # Step 3: Update Paper record with parsed data
         import asyncio
+        resolved_kb_id = kb_id
 
         async def _update_paper():
+            nonlocal resolved_kb_id
             async with async_session() as session:
                 paper = await session.get(Paper, paper_id)
                 if paper:
+                    if not resolved_kb_id and paper.kb_id:
+                        resolved_kb_id = str(paper.kb_id)
                     if parse_result.title:
                         paper.title = parse_result.title
                     if parse_result.abstract:
@@ -258,8 +301,7 @@ def parse_paper_task(
 
         asyncio.run(_update_paper())
 
-        # Step 4: Convert to chunkable text and chunk
-        chunkable_text = paper_to_chunkable_text(parse_result)
+        # Step 4: Chunk parsed paper content
         ref_text = paper_references_to_text(parse_result)
         title = parse_result.title or f"Paper {document_id}"
 
@@ -296,7 +338,7 @@ def parse_paper_task(
                 weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:paper:{idx}"))
                 properties = {
                     "org_id": org_id,
-                    "kb_id": "",  # Paper chunks use document-level isolation
+                    "kb_id": resolved_kb_id or "",
                     "document_id": document_id,
                     "document_version_id": version_id,
                     "chunk_id": weaviate_uuid,
@@ -310,7 +352,7 @@ def parse_paper_task(
                     "document_type": "paper",
                     "domain_tags": entities.get("diseases", [])[:5] + entities.get("targets", [])[:5],
                     "entities": entities.get("drugs", [])[:10] + entities.get("targets", [])[:10],
-                    "embedding_model": "text-embedding-v3",
+                    "embedding_model": settings.embedding_model,
                     "created_at": datetime.now(timezone.utc),
                     "section_type": chunk_data.get("section_type", "other"),
                 }
@@ -348,6 +390,7 @@ def parse_paper_task(
         return {
             "paper_id": paper_id,
             "document_id": document_id,
+            "kb_id": resolved_kb_id or "",
             "status": "ready",
             "chunk_count": len(paper_chunks),
             "chunk_ids": chunk_ids,
@@ -369,7 +412,7 @@ def run_evaluation_task(
     import asyncio
     from sqlalchemy import select
     from app.models.audit import EvaluationQuestion, EvaluationRun
-    from app.services.rag import hybrid_search, build_context
+    from app.services.rag import hybrid_search
 
     try:
         async def _run():
@@ -443,16 +486,18 @@ def run_evaluation_task(
 
         return asyncio.run(_run())
 
-    except Exception as e:
+    except Exception as exc:
+        error_message = str(exc)
+
         async def _fail():
             async with async_session() as session:
                 await session.execute(
                     update(EvaluationRun)
                     .where(EvaluationRun.id == run_id)
-                    .values(status="failed", error_message=str(e))
+                    .values(status="failed", error_message=error_message)
                 )
                 await session.commit()
 
         import asyncio
         asyncio.run(_fail())
-        raise self.retry(exc=e, countdown=60)
+        raise self.retry(exc=exc, countdown=60)

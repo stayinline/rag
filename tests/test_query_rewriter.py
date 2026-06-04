@@ -1,8 +1,6 @@
 """Tests for query rewriter service."""
-import pytest
 
 from app.services.query_rewriter import (
-    QueryRewriteResult,
     normalize_drug_names,
     expand_medical_terms,
     detect_entities,

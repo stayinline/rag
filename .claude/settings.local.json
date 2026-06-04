@@ -9,7 +9,20 @@
       "Bash(python -m pytest tests/test_paper_parser.py tests/test_metadata_enhancer.py tests/test_paper_chunker.py tests/test_reranker.py tests/test_query_rewriter.py tests/test_rag_v2.py tests/test_api_papers.py -v --tb=short)",
       "Bash(python:*)",
       "Bash(npm install:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(curl -s --connect-timeout 5 http://192.168.1.131:18080/v1/.well-known/ready)",
+      "Bash(powershell -Command \"Test-NetConnection -ComputerName 192.168.1.131 -Port 50051 -WarningAction SilentlyContinue | Select-Object TcpTestSucceeded\")",
+      "Bash(powershell -Command \"Test-NetConnection -ComputerName 192.168.1.131 -Port 18080 -WarningAction SilentlyContinue | Select-Object TcpTestSucceeded\")",
+      "Bash(docker ps:*)",
+      "Bash(powershell -Command \"[System.Environment]::GetEnvironmentVariable\\('WEAVIATE_URL','User'\\); [System.Environment]::GetEnvironmentVariable\\('WEAVIATE_URL','Process'\\)\")",
+      "Bash(netstat -ano、)",
+      "Bash(tasklist)",
+      "Bash(wmic process:*)",
+      "Bash(netstat -ano)",
+      "Bash(.venv/Scripts/python.exe scripts/seed_user.py)",
+      "Bash(.venv/Scripts/python.exe scripts/init_db.py)",
+      "Bash(powershell -Command \"Get-CimInstance Win32_Process -Filter 'ProcessId=201228 or ProcessId=58752' | Select-Object ProcessId,CommandLine | Format-List\")",
+      "Bash(curl -s http://127.0.0.1:8000/docs)"
     ]
   }
 }

@@ -1,5 +1,4 @@
 """Tests for paper parser service."""
-import pytest
 from unittest.mock import patch, MagicMock
 
 from app.services.paper_parser import (

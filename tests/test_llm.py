@@ -13,19 +13,26 @@ def test_system_prompt_content():
 def test_generate_stream_calls_api():
     with patch("app.services.llm.Generation") as mock_gen, \
          patch("app.services.llm.dashscope"):
+        from app.services.llm import settings
+
+        settings.llm_model = "configured-chat-model"
+        settings.dashscope_api_key = "configured-api-key"
+        settings.llm_timeout = 123
         mock_resp = MagicMock()
         mock_resp.output = MagicMock()
         mock_resp.output.choices = [{"message": {"content": "answer"}}]
         mock_gen.call = MagicMock(return_value=iter([mock_resp]))
 
-        response = generate_stream(
+        generate_stream(
             query="What is RAG?",
             context="RAG stands for Retrieval Augmented Generation.",
         )
 
         mock_gen.call.assert_called_once()
         call_kwargs = mock_gen.call.call_args[1]
-        assert call_kwargs["model"] is not None
+        assert call_kwargs["model"] == "configured-chat-model"
+        assert call_kwargs["api_key"] == "configured-api-key"
+        assert call_kwargs["request_timeout"] == 123
         assert call_kwargs["stream"] is True
         assert call_kwargs["incremental_output"] is True
 

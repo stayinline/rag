@@ -1,6 +1,5 @@
 """Tests for Document API endpoints."""
 import io
-import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -60,15 +59,28 @@ def test_upload_document(doc_test_client):
         doc_obj.security_level = "internal"
         doc_obj.current_version = 1
         doc_obj.source_type = "upload"
+        doc_obj.document_type = "general"
 
     mock_sess.add = MagicMock(side_effect=populate_doc)
     mock_sess.flush = AsyncMock()
     mock_sess.refresh = AsyncMock()
     mock_sess.commit = AsyncMock()
 
-    with patch("app.api.v1.documents.parse_document_task") as mock_task, \
+    parse_sig = MagicMock()
+    chunk_sig = MagicMock()
+    publish_sig = MagicMock()
+    parse_and_chunk_sig = MagicMock()
+    full_chain_sig = MagicMock()
+    parse_sig.__or__.return_value = parse_and_chunk_sig
+    parse_and_chunk_sig.__or__.return_value = full_chain_sig
+
+    with patch("app.api.v1.documents.parse_document_task") as mock_parse_task, \
+         patch("app.api.v1.documents.chunk_and_embed_from_parse_task") as mock_chunk_task, \
+         patch("app.api.v1.documents.publish_document_from_chunks_task") as mock_publish_task, \
          patch("app.api.v1.documents.settings") as mock_settings:
-        mock_task.delay = MagicMock()
+        mock_parse_task.s.return_value = parse_sig
+        mock_chunk_task.s.return_value = chunk_sig
+        mock_publish_task.s.return_value = publish_sig
         mock_settings.storage_path = tempfile.mkdtemp()
 
         resp = client.post(
@@ -80,6 +92,47 @@ def test_upload_document(doc_test_client):
     data = resp.json()
     assert "id" in data
     assert data["status"] == "draft"
+
+    from app.models.task import IngestionJob
+
+    jobs = [
+        call.args[0]
+        for call in mock_sess.add.call_args_list
+        if call.args and isinstance(call.args[0], IngestionJob)
+    ]
+    assert len(jobs) == 1
+    assert jobs[0].idempotency_key.startswith("parse:")
+    assert len(jobs[0].idempotency_key) <= 128
+
+    mock_parse_task.s.assert_called_once()
+    parse_kwargs = mock_parse_task.s.call_args.kwargs
+    assert parse_kwargs["org_id"]
+    assert parse_kwargs["document_id"]
+    assert parse_kwargs["version_id"]
+    assert parse_kwargs["storage_path"].endswith(".txt")
+    mock_chunk_task.s.assert_called_once_with(kb_id=str(kb_id), title="test.txt")
+    mock_publish_task.s.assert_called_once_with()
+    parse_sig.__or__.assert_called_once_with(chunk_sig)
+    parse_and_chunk_sig.__or__.assert_called_once_with(publish_sig)
+    full_chain_sig.delay.assert_called_once_with()
+
+
+def test_document_ingestion_key_is_stable_and_fits_column():
+    from app.api.v1.documents import make_document_ingestion_key
+
+    kwargs = {
+        "org_id": str(uuid.uuid4()),
+        "document_id": str(uuid.uuid4()),
+        "version_id": str(uuid.uuid4()),
+        "job_type": "parse",
+        "content_hash": "f" * 64,
+    }
+
+    key = make_document_ingestion_key(**kwargs)
+
+    assert key == make_document_ingestion_key(**kwargs)
+    assert key.startswith("parse:")
+    assert len(key) <= 128
 
 
 def test_upload_document_kb_not_found(doc_test_client):
@@ -112,6 +165,7 @@ def test_get_document(doc_test_client):
     mock_doc.current_version = 1
     mock_doc.status = "ready"
     mock_doc.security_level = "internal"
+    mock_doc.document_type = "general"
     mock_doc.created_by = uuid.uuid4()
     mock_doc.created_at = "2024-01-01T00:00:00Z"
     mock_doc.updated_at = "2024-01-01T00:00:00Z"
