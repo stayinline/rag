@@ -1,8 +1,10 @@
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from sqlalchemy import update as sql_update
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +14,7 @@ from app.database import get_db
 from app.models.document import Document, DocumentVersion
 from app.models.task import IngestionJob
 from app.schemas.document import DocumentListResponse, DocumentResponse
-from app.workers.tasks import chunk_and_embed_from_parse_task, parse_document_task, publish_document_from_chunks_task
+from app.workers.tasks import queue_document_ingestion
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="", tags=["documents"])
@@ -139,30 +141,49 @@ async def upload_document(
         content_hash,
     )
 
-    # Kick off the full ingestion pipeline: parse -> chunk/embed -> publish.
-    ingestion_chain = (
-        parse_document_task.s(
+    try:
+        async_result = queue_document_ingestion(
             org_id=str(user["org_id"]),
             document_id=str(document.id),
             version_id=str(version.id),
-            storage_path=file_path,
-        )
-        | chunk_and_embed_from_parse_task.s(
             kb_id=str(kb_id),
             title=document.title,
+            storage_path=file_path,
         )
-        | publish_document_from_chunks_task.s()
-    )
-    ingestion_chain.delay()
-    logger.info(
-        "Upload document ingestion chain queued org_id=%s user_id=%s kb_id=%s document_id=%s version_id=%s job_id=%s",
-        user["org_id"],
-        user["user_id"],
-        kb_id,
-        document.id,
-        version.id,
-        job.id,
-    )
+        logger.info(
+            "Upload document ingestion chain queued org_id=%s user_id=%s kb_id=%s document_id=%s version_id=%s job_id=%s root_task_id=%s",
+            user["org_id"],
+            user["user_id"],
+            kb_id,
+            document.id,
+            version.id,
+            job.id,
+            async_result.id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Upload document ingestion queue failed org_id=%s user_id=%s kb_id=%s document_id=%s version_id=%s job_id=%s",
+            user["org_id"],
+            user["user_id"],
+            kb_id,
+            document.id,
+            version.id,
+            job.id,
+        )
+        await db.execute(sql_update(Document).where(Document.id == document.id).values(status="failed"))
+        await db.execute(sql_update(DocumentVersion).where(DocumentVersion.id == version.id).values(index_status="failed"))
+        await db.execute(
+            sql_update(IngestionJob)
+            .where(IngestionJob.id == job.id)
+            .values(
+                status="failed",
+                error_code=exc.__class__.__name__[:100],
+                error_message=str(exc)[:2000],
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+        raise HTTPException(status_code=503, detail="Document ingestion queue failed") from exc
 
     return document
 

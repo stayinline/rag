@@ -115,9 +115,11 @@ def test_chat_stream_chunk():
 
 
 def test_chat_stream_chunk_done():
-    chunk = ChatStreamChunk(delta="", done=True, trace_id="t1")
+    message_id = uuid.uuid4()
+    chunk = ChatStreamChunk(delta="", done=True, trace_id="t1", message_id=message_id)
     assert chunk.done is True
     assert chunk.trace_id == "t1"
+    assert chunk.message_id == message_id
 
 
 # Search Schemas

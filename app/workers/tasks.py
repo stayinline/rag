@@ -1,6 +1,9 @@
+import asyncio
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import update
 
@@ -20,9 +23,212 @@ from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+_worker_async_loop: asyncio.AbstractEventLoop | None = None
+_worker_async_loop_thread: threading.Thread | None = None
+_worker_async_loop_lock = threading.Lock()
+
+
+def _get_worker_async_loop() -> asyncio.AbstractEventLoop:
+    global _worker_async_loop, _worker_async_loop_thread
+
+    with _worker_async_loop_lock:
+        if _worker_async_loop and _worker_async_loop.is_running():
+            return _worker_async_loop
+
+        loop = asyncio.new_event_loop()
+
+        def _run_loop() -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        thread = threading.Thread(
+            target=_run_loop,
+            name="celery-worker-asyncio-loop",
+            daemon=True,
+        )
+        thread.start()
+        _worker_async_loop = loop
+        _worker_async_loop_thread = thread
+        return loop
+
+
+def _run_async(coro):
+    """Run async DB work on a stable loop owned by this worker process."""
+    loop = _get_worker_async_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
+
+def _is_weaviate_duplicate_error(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) == 422 and "already exists" in str(exc)
+
+
+def _upsert_weaviate_object(
+    collection: Any,
+    *,
+    object_id: str,
+    properties: dict[str, Any],
+    vector: list[float],
+    task_id: str,
+    owner_type: str,
+    owner_id: str,
+) -> str:
+    """Insert a Weaviate object, or update it when a retry already wrote it."""
+    if collection.data.exists(object_id) is True:
+        collection.data.update(uuid=object_id, properties=properties, vector=vector)
+        logger.debug(
+            "Weaviate object updated task_id=%s %s=%s object_id=%s",
+            task_id,
+            owner_type,
+            owner_id,
+            object_id,
+        )
+        return "updated"
+
+    try:
+        collection.data.insert(uuid=object_id, properties=properties, vector=vector)
+        return "inserted"
+    except Exception as exc:
+        if not _is_weaviate_duplicate_error(exc):
+            raise
+        collection.data.update(uuid=object_id, properties=properties, vector=vector)
+        logger.info(
+            "Weaviate object duplicate on insert; updated existing object task_id=%s %s=%s object_id=%s",
+            task_id,
+            owner_type,
+            owner_id,
+            object_id,
+        )
+        return "updated"
+
 
 def _make_idEMPOTENCY_KEY(org_id: str, document_id: str, version_id: str, job_type: str) -> str:
     return f"{org_id}:{document_id}:{version_id}:{job_type}"
+
+
+def _task_request_id(task: Any) -> str:
+    return str(getattr(getattr(task, "request", None), "id", None) or "")
+
+
+def _task_retries(task: Any) -> int:
+    return int(getattr(getattr(task, "request", None), "retries", 0) or 0)
+
+
+async def _mark_ingestion_job(
+    document_id: str,
+    version_id: str,
+    status: str,
+    *,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    increment_retry: bool = False,
+) -> None:
+    values: dict[str, Any] = {"status": status}
+    now = datetime.now(timezone.utc)
+    if status == "running":
+        values["started_at"] = now
+        values["error_code"] = None
+        values["error_message"] = None
+    if status in {"completed", "failed"}:
+        values["finished_at"] = now
+    if error_code is not None:
+        values["error_code"] = error_code[:100]
+    if error_message is not None:
+        values["error_message"] = error_message[:2000]
+    if increment_retry:
+        from app.models.task import IngestionJob
+
+        async with async_session() as session:
+            await session.execute(
+                update(IngestionJob)
+                .where(
+                    IngestionJob.document_id == document_id,
+                    IngestionJob.version_id == version_id,
+                    IngestionJob.job_type == "parse",
+                )
+                .values(**values, retry_count=IngestionJob.retry_count + 1)
+            )
+            await session.commit()
+        return
+
+    from app.models.task import IngestionJob
+
+    async with async_session() as session:
+        await session.execute(
+            update(IngestionJob)
+            .where(
+                IngestionJob.document_id == document_id,
+                IngestionJob.version_id == version_id,
+                IngestionJob.job_type == "parse",
+            )
+            .values(**values)
+        )
+        await session.commit()
+
+
+def _set_ingestion_job_status(
+    document_id: str,
+    version_id: str,
+    status: str,
+    *,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    increment_retry: bool = False,
+) -> None:
+    try:
+        _run_async(
+            _mark_ingestion_job(
+                document_id=document_id,
+                version_id=version_id,
+                status=status,
+                error_code=error_code,
+                error_message=error_message,
+                increment_retry=increment_retry,
+            )
+        )
+    except Exception:
+        logger.warning(
+            "Failed to update ingestion job status document_id=%s version_id=%s status=%s",
+            document_id,
+            version_id,
+            status,
+            exc_info=True,
+        )
+
+
+def queue_document_ingestion(
+    *,
+    org_id: str,
+    document_id: str,
+    version_id: str,
+    kb_id: str,
+    title: str,
+    storage_path: str,
+):
+    """Queue parse -> chunk/embed -> publish for a document."""
+    ingestion_chain = (
+        parse_document_task.s(
+            org_id=str(org_id),
+            document_id=str(document_id),
+            version_id=str(version_id),
+            storage_path=storage_path,
+        )
+        | chunk_and_embed_from_parse_task.s(
+            kb_id=str(kb_id),
+            title=title,
+        )
+        | publish_document_from_chunks_task.s()
+    )
+    async_result = ingestion_chain.apply_async()
+    logger.info(
+        "Document ingestion chain queued root_task_id=%s org_id=%s document_id=%s version_id=%s kb_id=%s",
+        async_result.id,
+        org_id,
+        document_id,
+        version_id,
+        kb_id,
+    )
+    return async_result
 
 
 @celery_app.task(bind=True, name="parse_document", max_retries=3)
@@ -37,9 +243,10 @@ def parse_document_task(
     import os
 
     try:
+        _set_ingestion_job_status(document_id, version_id, "running")
         logger.info(
             "Task parse_document start task_id=%s org_id=%s document_id=%s version_id=%s storage_path=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
@@ -54,7 +261,7 @@ def parse_document_task(
 
         logger.info(
             "Task parse_document complete task_id=%s org_id=%s document_id=%s version_id=%s parsed_path=%s text_length=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
@@ -70,13 +277,21 @@ def parse_document_task(
         }
 
     except Exception as e:
+        _set_ingestion_job_status(
+            document_id,
+            version_id,
+            "failed",
+            error_code=e.__class__.__name__,
+            error_message=str(e),
+            increment_retry=True,
+        )
         logger.exception(
             "Task parse_document failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
-            self.request.retries,
+            _task_retries(self),
         )
         raise self.retry(exc=e, countdown=30)
 
@@ -96,7 +311,7 @@ def chunk_and_embed_task(
     try:
         logger.info(
             "Task chunk_and_embed start task_id=%s org_id=%s document_id=%s version_id=%s kb_id=%s parsed_path=%s batch_size=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
@@ -108,7 +323,7 @@ def chunk_and_embed_task(
             text = f.read()
         logger.info(
             "Task chunk_and_embed parsed text loaded task_id=%s document_id=%s text_length=%s",
-            self.request.id,
+            _task_request_id(self),
             document_id,
             len(text),
         )
@@ -116,7 +331,7 @@ def chunk_and_embed_task(
         chunks = chunk_text(text, title=title)
         logger.info(
             "Task chunk_and_embed chunking complete task_id=%s document_id=%s chunk_count=%s",
-            self.request.id,
+            _task_request_id(self),
             document_id,
             len(chunks),
         )
@@ -127,7 +342,7 @@ def chunk_and_embed_task(
             batch = [c["content"] for c in chunks[i:i + batch_size]]
             logger.info(
                 "Task chunk_and_embed embedding batch task_id=%s document_id=%s batch_start=%s batch_size=%s",
-                self.request.id,
+                _task_request_id(self),
                 document_id,
                 i,
                 len(batch),
@@ -136,18 +351,20 @@ def chunk_and_embed_task(
             all_vectors.extend(vectors)
         logger.info(
             "Task chunk_and_embed embedding complete task_id=%s document_id=%s vector_count=%s",
-            self.request.id,
+            _task_request_id(self),
             document_id,
             len(all_vectors),
         )
 
         # Write to Weaviate
         client = get_client()
-        logger.info("Task chunk_and_embed connecting Weaviate task_id=%s document_id=%s", self.request.id, document_id)
+        logger.info("Task chunk_and_embed connecting Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
         client.connect()
         try:
             collection = client.collections.get(COLLECTION_NAME)
             chunk_ids = []
+            inserted_count = 0
+            updated_count = 0
 
             for idx, (chunk_data, vector) in enumerate(zip(chunks, all_vectors)):
                 weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:{idx}"))
@@ -171,18 +388,28 @@ def chunk_and_embed_task(
                     "created_at": datetime.now(timezone.utc),
                     "section_type": None,
                 }
-                collection.data.insert(
-                    uuid=weaviate_uuid,
+                write_action = _upsert_weaviate_object(
+                    collection,
+                    object_id=weaviate_uuid,
                     properties=properties,
                     vector=vector,
+                    task_id=_task_request_id(self),
+                    owner_type="document_id",
+                    owner_id=document_id,
                 )
+                if write_action == "inserted":
+                    inserted_count += 1
+                else:
+                    updated_count += 1
                 chunk_ids.append(weaviate_uuid)
 
             logger.info(
-                "Task chunk_and_embed Weaviate insert complete task_id=%s document_id=%s chunk_count=%s",
-                self.request.id,
+                "Task chunk_and_embed Weaviate upsert complete task_id=%s document_id=%s chunk_count=%s inserted=%s updated=%s",
+                _task_request_id(self),
                 document_id,
                 len(chunk_ids),
+                inserted_count,
+                updated_count,
             )
             return {
                 "org_id": org_id,
@@ -194,16 +421,24 @@ def chunk_and_embed_task(
             }
         finally:
             client.close()
-            logger.debug("Task chunk_and_embed Weaviate client closed task_id=%s document_id=%s", self.request.id, document_id)
+            logger.debug("Task chunk_and_embed Weaviate client closed task_id=%s document_id=%s", _task_request_id(self), document_id)
 
     except Exception as e:
+        _set_ingestion_job_status(
+            document_id,
+            version_id,
+            "failed",
+            error_code=e.__class__.__name__,
+            error_message=str(e),
+            increment_retry=True,
+        )
         logger.exception(
             "Task chunk_and_embed failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
-            self.request.retries,
+            _task_retries(self),
         )
         raise self.retry(exc=e, countdown=60)
 
@@ -220,7 +455,7 @@ def chunk_and_embed_from_parse_task(
     try:
         logger.info(
             "Task chunk_and_embed_from_parse start task_id=%s document_id=%s kb_id=%s text_length=%s",
-            self.request.id,
+            _task_request_id(self),
             parse_result.get("document_id"),
             kb_id,
             parse_result.get("text_length"),
@@ -237,9 +472,9 @@ def chunk_and_embed_from_parse_task(
     except Exception as e:
         logger.exception(
             "Task chunk_and_embed_from_parse failed task_id=%s document_id=%s retry=%s",
-            self.request.id,
+            _task_request_id(self),
             parse_result.get("document_id"),
-            self.request.retries,
+            _task_retries(self),
         )
         raise self.retry(exc=e, countdown=60)
 
@@ -258,7 +493,7 @@ def publish_document_task(
     try:
         logger.info(
             "Task publish_document start task_id=%s org_id=%s document_id=%s version_id=%s kb_id=%s chunk_count=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
@@ -291,18 +526,17 @@ def publish_document_task(
                     )
                 await session.commit()
 
-        import asyncio
-        asyncio.run(_update())
+        _run_async(_update())
         logger.info(
             "Task publish_document database update complete task_id=%s document_id=%s version_id=%s",
-            self.request.id,
+            _task_request_id(self),
             document_id,
             version_id,
         )
 
         # Update Weaviate chunks status to ready
         client = get_client()
-        logger.info("Task publish_document connecting Weaviate task_id=%s document_id=%s", self.request.id, document_id)
+        logger.info("Task publish_document connecting Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
         client.connect()
         try:
             collection = client.collections.get(COLLECTION_NAME)
@@ -317,14 +551,14 @@ def publish_document_task(
                 except Exception:
                     logger.warning(
                         "Task publish_document Weaviate chunk update failed task_id=%s document_id=%s chunk_id=%s",
-                        self.request.id,
+                        _task_request_id(self),
                         document_id,
                         cid,
                         exc_info=True,
                     )
             logger.info(
                 "Task publish_document Weaviate update complete task_id=%s document_id=%s updated_chunks=%s requested_chunks=%s",
-                self.request.id,
+                _task_request_id(self),
                 document_id,
                 updated_count,
                 len(chunk_ids),
@@ -332,17 +566,26 @@ def publish_document_task(
         finally:
             client.close()
 
-        logger.info("Task publish_document complete task_id=%s document_id=%s status=ready", self.request.id, document_id)
+        _set_ingestion_job_status(document_id, version_id, "completed")
+        logger.info("Task publish_document complete task_id=%s document_id=%s status=ready", _task_request_id(self), document_id)
         return {"document_id": document_id, "status": "ready", "chunk_count": chunk_count}
 
     except Exception as e:
+        _set_ingestion_job_status(
+            document_id,
+            version_id,
+            "failed",
+            error_code=e.__class__.__name__,
+            error_message=str(e),
+            increment_retry=True,
+        )
         logger.exception(
             "Task publish_document failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
-            self.request.id,
+            _task_request_id(self),
             org_id,
             document_id,
             version_id,
-            self.request.retries,
+            _task_retries(self),
         )
         raise self.retry(exc=e, countdown=30)
 
@@ -353,7 +596,7 @@ def publish_document_from_chunks_task(self, embed_result: dict) -> dict:
     try:
         logger.info(
             "Task publish_document_from_chunks start task_id=%s document_id=%s chunk_count=%s",
-            self.request.id,
+            _task_request_id(self),
             embed_result.get("document_id"),
             embed_result.get("chunk_count"),
         )
@@ -368,9 +611,9 @@ def publish_document_from_chunks_task(self, embed_result: dict) -> dict:
     except Exception as e:
         logger.exception(
             "Task publish_document_from_chunks failed task_id=%s document_id=%s retry=%s",
-            self.request.id,
+            _task_request_id(self),
             embed_result.get("document_id"),
-            self.request.retries,
+            _task_retries(self),
         )
         raise self.retry(exc=e, countdown=30)
 
@@ -460,7 +703,6 @@ def parse_paper_task(
         )
 
         # Step 3: Update Paper record with parsed data
-        import asyncio
         resolved_kb_id = kb_id
 
         async def _update_paper():
@@ -490,7 +732,7 @@ def parse_paper_task(
                     paper.enhancement_source = "crossref" if doi else ("pubmed" if pmid else "none")
                     await session.commit()
 
-        asyncio.run(_update_paper())
+        _run_async(_update_paper())
         logger.info(
             "Task parse_paper paper record updated task_id=%s paper_id=%s resolved_kb_id=%s",
             self.request.id,
@@ -546,6 +788,8 @@ def parse_paper_task(
         try:
             collection = client.collections.get(COLLECTION_NAME)
             chunk_ids = []
+            inserted_count = 0
+            updated_count = 0
 
             for idx, (chunk_data, vector) in enumerate(zip(paper_chunks, all_vectors)):
                 weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:paper:{idx}"))
@@ -569,13 +813,28 @@ def parse_paper_task(
                     "created_at": datetime.now(timezone.utc),
                     "section_type": chunk_data.get("section_type", "other"),
                 }
-                collection.data.insert(
-                    uuid=weaviate_uuid,
+                write_action = _upsert_weaviate_object(
+                    collection,
+                    object_id=weaviate_uuid,
                     properties=properties,
                     vector=vector,
+                    task_id=self.request.id,
+                    owner_type="paper_id",
+                    owner_id=paper_id,
                 )
+                if write_action == "inserted":
+                    inserted_count += 1
+                else:
+                    updated_count += 1
                 chunk_ids.append(weaviate_uuid)
-            logger.info("Task parse_paper Weaviate insert complete task_id=%s paper_id=%s chunk_count=%s", self.request.id, paper_id, len(chunk_ids))
+            logger.info(
+                "Task parse_paper Weaviate upsert complete task_id=%s paper_id=%s chunk_count=%s inserted=%s updated=%s",
+                self.request.id,
+                paper_id,
+                len(chunk_ids),
+                inserted_count,
+                updated_count,
+            )
         finally:
             client.close()
             logger.debug("Task parse_paper Weaviate client closed task_id=%s paper_id=%s", self.request.id, paper_id)
@@ -600,7 +859,7 @@ def parse_paper_task(
                 )
                 await session.commit()
 
-        asyncio.run(_finalize())
+        _run_async(_finalize())
         logger.info(
             "Task parse_paper finalize complete task_id=%s paper_id=%s document_id=%s chunk_count=%s",
             self.request.id,
@@ -640,7 +899,6 @@ def run_evaluation_task(
     config: dict | None = None,
 ) -> dict:
     """Run evaluation against an evaluation set."""
-    import asyncio
     from sqlalchemy import select
     from app.models.audit import EvaluationQuestion, EvaluationRun
     from app.services.rag import hybrid_search
@@ -745,7 +1003,7 @@ def run_evaluation_task(
                 logger.info("Task run_evaluation complete task_id=%s run_id=%s metrics=%s", self.request.id, run_id, metrics)
                 return metrics
 
-        metrics = asyncio.run(_run())
+        metrics = _run_async(_run())
         logger.info("Task run_evaluation finished task_id=%s run_id=%s", self.request.id, run_id)
         return metrics
 
@@ -769,7 +1027,6 @@ def run_evaluation_task(
                 )
                 await session.commit()
 
-        import asyncio
-        asyncio.run(_fail())
+        _run_async(_fail())
         logger.info("Task run_evaluation status updated task_id=%s run_id=%s status=failed", self.request.id, run_id)
         raise self.retry(exc=exc, countdown=60)

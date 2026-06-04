@@ -106,6 +106,13 @@ export const chat = (query, kbIds = [], conversationId = null) =>
   api.post('/chat', { query, kb_ids: kbIds, conversation_id: conversationId, stream: false })
     .then((r) => r.data)
 
+export const listConversations = (params = {}) =>
+  api.get('/conversations', { params }).then((r) => r.data)
+export const getConversation = (id) =>
+  api.get(`/conversations/${id}`).then((r) => r.data)
+export const deleteConversation = (id) =>
+  api.delete(`/conversations/${id}`).then((r) => r.data)
+
 // Search
 export const search = (query, kbIds = [], limit = 10) =>
   api.post('/search', { query, kb_ids: kbIds, limit }).then((r) => r.data)

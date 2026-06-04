@@ -139,6 +139,8 @@ def test_client():
         app.dependency_overrides[get_db] = _override_db
 
         client = TestClient(app)
+        client.mock_session = mock_sess
+        client.test_user = test_user
         yield client
 
         app.dependency_overrides.pop(get_current_user, None)

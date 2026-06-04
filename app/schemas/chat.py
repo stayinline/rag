@@ -24,6 +24,10 @@ class ChatSource(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     trace_id: str
+    message_id: UUID | None = Field(
+        default=None,
+        description="Answer identifier for feedback; equals trace_id when present",
+    )
     conversation_id: UUID | None
     sources: list[ChatSource]
     model: str
@@ -34,5 +38,6 @@ class ChatStreamChunk(BaseModel):
     delta: str = ""
     done: bool = False
     trace_id: str | None = None
+    message_id: UUID | None = None
     sources: list[ChatSource] = []
     conversation_id: UUID | None = None

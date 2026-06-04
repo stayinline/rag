@@ -74,6 +74,57 @@ def test_get_ingestion_job_not_found(ingestion_test_client):
     assert resp.status_code == 404
 
 
+def test_retry_ingestion_job(ingestion_test_client):
+    client, mock_sess = ingestion_test_client
+    org_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    kb_id = uuid.uuid4()
+
+    mock_job = MagicMock()
+    mock_job.id = uuid.uuid4()
+    mock_job.org_id = org_id
+    mock_job.document_id = document_id
+    mock_job.version_id = version_id
+    mock_job.job_type = "parse"
+    mock_job.status = "failed"
+    mock_job.retry_count = 1
+    mock_job.error_code = "NotRegistered"
+    mock_job.error_message = "parse_document"
+    mock_job.started_at = None
+    mock_job.finished_at = None
+    mock_job.created_at = "2024-01-01T00:00:00Z"
+
+    mock_doc = MagicMock()
+    mock_doc.id = document_id
+    mock_doc.org_id = org_id
+    mock_doc.kb_id = kb_id
+    mock_doc.title = "test.pdf"
+
+    mock_version = MagicMock()
+    mock_version.id = version_id
+    mock_version.storage_path = "/tmp/test.pdf"
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_job
+    mock_sess.execute = AsyncMock(return_value=mock_result)
+    mock_sess.get = AsyncMock(side_effect=[mock_version, mock_doc])
+
+    with patch("app.api.v1.ingestion.queue_document_ingestion") as mock_queue:
+        mock_queue.return_value.id = "retry-root-task"
+        resp = client.post(f"/api/v1/ingestion-jobs/{mock_job.id}/retry")
+
+    assert resp.status_code == 200
+    mock_queue.assert_called_once_with(
+        org_id=str(mock_job.org_id),
+        document_id=str(mock_doc.id),
+        version_id=str(mock_version.id),
+        kb_id=str(mock_doc.kb_id),
+        title=mock_doc.title,
+        storage_path=mock_version.storage_path,
+    )
+
+
 def test_get_ingestion_job_unauthorized():
     """Test without auth override - returns 422 for missing header."""
     with patch("app.main.ensure_collection"):

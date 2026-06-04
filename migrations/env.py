@@ -10,6 +10,7 @@ from app.models.kb import KnowledgeBase  # noqa
 from app.models.document import Document, DocumentVersion  # noqa
 from app.models.chunk import DocumentChunk  # noqa
 from app.models.task import IngestionJob  # noqa
+from app.models.conversation import Conversation, ConversationMessage  # noqa
 
 config = context.config
 target_metadata = Base.metadata

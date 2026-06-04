@@ -66,22 +66,10 @@ def test_upload_document(doc_test_client):
     mock_sess.refresh = AsyncMock()
     mock_sess.commit = AsyncMock()
 
-    parse_sig = MagicMock()
-    chunk_sig = MagicMock()
-    publish_sig = MagicMock()
-    parse_and_chunk_sig = MagicMock()
-    full_chain_sig = MagicMock()
-    parse_sig.__or__.return_value = parse_and_chunk_sig
-    parse_and_chunk_sig.__or__.return_value = full_chain_sig
-
-    with patch("app.api.v1.documents.parse_document_task") as mock_parse_task, \
-         patch("app.api.v1.documents.chunk_and_embed_from_parse_task") as mock_chunk_task, \
-         patch("app.api.v1.documents.publish_document_from_chunks_task") as mock_publish_task, \
+    with patch("app.api.v1.documents.queue_document_ingestion") as mock_queue, \
          patch("app.api.v1.documents.settings") as mock_settings:
-        mock_parse_task.s.return_value = parse_sig
-        mock_chunk_task.s.return_value = chunk_sig
-        mock_publish_task.s.return_value = publish_sig
         mock_settings.storage_path = tempfile.mkdtemp()
+        mock_queue.return_value.id = "root-task-id"
 
         resp = client.post(
             f"/api/v1/kbs/{kb_id}/documents",
@@ -104,17 +92,14 @@ def test_upload_document(doc_test_client):
     assert jobs[0].idempotency_key.startswith("parse:")
     assert len(jobs[0].idempotency_key) <= 128
 
-    mock_parse_task.s.assert_called_once()
-    parse_kwargs = mock_parse_task.s.call_args.kwargs
-    assert parse_kwargs["org_id"]
-    assert parse_kwargs["document_id"]
-    assert parse_kwargs["version_id"]
-    assert parse_kwargs["storage_path"].endswith(".txt")
-    mock_chunk_task.s.assert_called_once_with(kb_id=str(kb_id), title="test.txt")
-    mock_publish_task.s.assert_called_once_with()
-    parse_sig.__or__.assert_called_once_with(chunk_sig)
-    parse_and_chunk_sig.__or__.assert_called_once_with(publish_sig)
-    full_chain_sig.delay.assert_called_once_with()
+    mock_queue.assert_called_once()
+    queue_kwargs = mock_queue.call_args.kwargs
+    assert queue_kwargs["org_id"]
+    assert queue_kwargs["document_id"]
+    assert queue_kwargs["version_id"]
+    assert queue_kwargs["storage_path"].endswith(".txt")
+    assert queue_kwargs["kb_id"] == str(kb_id)
+    assert queue_kwargs["title"] == "test.txt"
 
 
 def test_document_ingestion_key_is_stable_and_fits_column():

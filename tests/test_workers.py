@@ -110,6 +110,59 @@ Here we describe the methods used in this study about retrieval.
     os.unlink(parsed_path)
 
 
+def test_upsert_weaviate_object_updates_existing_object():
+    from app.workers.tasks import _upsert_weaviate_object
+
+    collection = MagicMock()
+    collection.data.exists.return_value = True
+    properties = {"status": "draft"}
+    vector = [0.1, 0.2]
+
+    result = _upsert_weaviate_object(
+        collection,
+        object_id="chunk-id",
+        properties=properties,
+        vector=vector,
+        task_id="task-id",
+        owner_type="document_id",
+        owner_id="doc-id",
+    )
+
+    assert result == "updated"
+    collection.data.insert.assert_not_called()
+    collection.data.update.assert_called_once_with(uuid="chunk-id", properties=properties, vector=vector)
+
+
+def test_upsert_weaviate_object_updates_duplicate_insert():
+    from app.workers.tasks import _upsert_weaviate_object
+
+    class DuplicateObjectError(Exception):
+        status_code = 422
+
+        def __str__(self):
+            return "id 'chunk-id' already exists"
+
+    collection = MagicMock()
+    collection.data.exists.return_value = False
+    collection.data.insert.side_effect = DuplicateObjectError()
+    properties = {"status": "draft"}
+    vector = [0.1, 0.2]
+
+    result = _upsert_weaviate_object(
+        collection,
+        object_id="chunk-id",
+        properties=properties,
+        vector=vector,
+        task_id="task-id",
+        owner_type="document_id",
+        owner_id="doc-id",
+    )
+
+    assert result == "updated"
+    collection.data.insert.assert_called_once_with(uuid="chunk-id", properties=properties, vector=vector)
+    collection.data.update.assert_called_once_with(uuid="chunk-id", properties=properties, vector=vector)
+
+
 def test_chunk_and_embed_task_missing_file():
     from app.workers.tasks import chunk_and_embed_task
     from celery.exceptions import Retry

@@ -1,12 +1,19 @@
 import json
 import logging
 import time
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends
+import anyio
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.config import settings
+from app.database import get_db
+from app.models.conversation import Conversation, ConversationMessage
 from app.schemas.chat import ChatRequest, ChatStreamChunk
 from app.services.rag import assemble_context_and_generate
 
@@ -18,6 +25,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 async def create_chat(
     data: ChatRequest,
     user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     start = time.monotonic()
     kb_ids = [str(kb) for kb in data.kb_ids] if data.kb_ids else []
@@ -33,24 +41,46 @@ async def create_chat(
 
     if data.stream:
 
-        def event_stream():
+        async def event_stream():
             chunk_count = 0
             last_trace_id = None
+            full_answer = ""
+            sources = []
             try:
-                for item in assemble_context_and_generate(
+                iterator = assemble_context_and_generate(
                     query=data.query,
                     org_id=str(user["org_id"]),
                     kb_ids=kb_ids,
                     user_id=str(user["user_id"]),
-                ):
+                )
+                while True:
+                    item = await anyio.to_thread.run_sync(_next_or_none, iterator)
+                    if item is None:
+                        break
                     chunk_count += 1
                     last_trace_id = item.get("trace_id") or last_trace_id
+                    delta = item.get("delta", "")
+                    full_answer += delta
+                    done = item.get("done", False)
+                    if done:
+                        sources = item.get("sources", [])
+                        conversation_id, message_id = await _persist_chat_turn(
+                            db=db,
+                            user=user,
+                            data=data,
+                            answer=full_answer,
+                            trace_id=last_trace_id,
+                            sources=sources,
+                        )
+                    else:
+                        conversation_id, message_id = data.conversation_id, None
                     chunk = ChatStreamChunk(
-                        delta=item.get("delta", ""),
-                        done=item.get("done", False),
+                        delta=delta,
+                        done=done,
                         trace_id=item.get("trace_id"),
-                        sources=item.get("sources", []),
-                        conversation_id=data.conversation_id,
+                        message_id=message_id,
+                        sources=sources if done else [],
+                        conversation_id=conversation_id,
                     )
                     if chunk.done:
                         logger.info(
@@ -62,7 +92,7 @@ async def create_chat(
                             len(chunk.sources),
                             (time.monotonic() - start) * 1000,
                         )
-                    yield f"data: {json.dumps(chunk.model_dump(), ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(chunk.model_dump(mode='json'), ensure_ascii=False)}\n\n"
             except Exception:
                 logger.exception(
                     "Chat stream failed org_id=%s user_id=%s trace_id=%s chunks=%s duration_ms=%.2f",
@@ -100,11 +130,137 @@ async def create_chat(
             len(sources),
             (time.monotonic() - start) * 1000,
         )
+        conversation_id, message_id = await _persist_chat_turn(
+            db=db,
+            user=user,
+            data=data,
+            answer=full_answer,
+            trace_id=trace_id,
+            sources=sources,
+        )
+
         return {
             "answer": full_answer,
             "trace_id": trace_id or "",
-            "conversation_id": str(data.conversation_id) if data.conversation_id else None,
+            "message_id": message_id,
+            "conversation_id": str(conversation_id),
             "sources": sources,
             "model": settings.llm_model,
             "prompt_version": "v1",
         }
+
+
+async def _persist_chat_turn(
+    db: AsyncSession,
+    user: dict,
+    data: ChatRequest,
+    answer: str,
+    trace_id: str | None,
+    sources: list,
+) -> tuple[UUID, UUID]:
+    now = datetime.now(timezone.utc)
+    kb_ids = [str(kb_id) for kb_id in data.kb_ids] if data.kb_ids else []
+
+    if data.conversation_id:
+        result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == data.conversation_id,
+                Conversation.org_id == user["org_id"],
+                Conversation.user_id == user["user_id"],
+                Conversation.deleted_at.is_(None),
+            )
+        )
+        conversation = result.scalar_one_or_none()
+        if not conversation:
+            logger.warning(
+                "Chat conversation lookup failed org_id=%s user_id=%s conversation_id=%s reason=not_found",
+                user["org_id"],
+                user["user_id"],
+                data.conversation_id,
+            )
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    else:
+        conversation = Conversation(
+            id=uuid4(),
+            org_id=user["org_id"],
+            user_id=user["user_id"],
+            title=_make_conversation_title(data.query),
+            kb_ids=kb_ids,
+            message_count=0,
+            last_message_at=now,
+        )
+        db.add(conversation)
+        await db.flush()
+
+    next_sequence = conversation.message_count or 0
+    if data.conversation_id:
+        count_result = await db.execute(
+            select(func.count())
+            .select_from(ConversationMessage)
+            .where(
+                ConversationMessage.org_id == user["org_id"],
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.user_id == user["user_id"],
+            )
+        )
+        next_sequence = count_result.scalar() or next_sequence
+
+    user_message = ConversationMessage(
+        id=uuid4(),
+        org_id=user["org_id"],
+        conversation_id=conversation.id,
+        user_id=user["user_id"],
+        role="user",
+        content=data.query,
+        sequence=next_sequence + 1,
+        kb_ids=kb_ids,
+    )
+    assistant_message = ConversationMessage(
+        id=uuid4(),
+        org_id=user["org_id"],
+        conversation_id=conversation.id,
+        user_id=user["user_id"],
+        role="assistant",
+        content=answer,
+        sequence=next_sequence + 2,
+        trace_id=trace_id,
+        sources=sources,
+        kb_ids=kb_ids,
+        model=settings.llm_model,
+        prompt_version="v1",
+    )
+    db.add(user_message)
+    db.add(assistant_message)
+
+    existing_kb_ids = conversation.kb_ids or []
+    if kb_ids and not existing_kb_ids:
+        conversation.kb_ids = kb_ids
+    conversation.message_count = next_sequence + 2
+    conversation.last_message_at = now
+
+    await db.commit()
+    await db.refresh(conversation)
+    await db.refresh(assistant_message)
+    logger.info(
+        "Chat turn persisted org_id=%s user_id=%s conversation_id=%s user_message_id=%s assistant_message_id=%s",
+        user["org_id"],
+        user["user_id"],
+        conversation.id,
+        user_message.id,
+        assistant_message.id,
+    )
+    return conversation.id, assistant_message.id
+
+
+def _make_conversation_title(query: str) -> str:
+    title = " ".join((query or "").strip().split())
+    if len(title) > 40:
+        return f"{title[:40]}..."
+    return title or "新对话"
+
+
+def _next_or_none(iterator):
+    try:
+        return next(iterator)
+    except StopIteration:
+        return None

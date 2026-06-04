@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.audit import AnswerFeedback, EvaluationSet, EvaluationRun, EvaluationQuestion
+from app.models.conversation import ConversationMessage
 from app.schemas.analytics import (
     FeedbackCreate,
     FeedbackResponse,
@@ -51,10 +52,22 @@ async def submit_feedback(
         data.rating,
         len(data.reason_tags or []),
     )
+    message_result = await db.execute(
+        select(ConversationMessage).where(
+            ConversationMessage.id == message_id,
+            ConversationMessage.org_id == user["org_id"],
+            ConversationMessage.user_id == user["user_id"],
+            ConversationMessage.role == "assistant",
+        )
+    )
+    message = message_result.scalar_one_or_none()
+    trace_id = message.trace_id if message and message.trace_id else str(message_id)
+
     feedback = AnswerFeedback(
         id=uuid.uuid4(),
         org_id=org_id,
         message_id=message_id,
+        trace_id=trace_id,
         rating=data.rating,
         reason_tags=data.reason_tags,
         comment=data.comment,
