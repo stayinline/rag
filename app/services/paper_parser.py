@@ -1,6 +1,7 @@
 """SCI PDF paper parser with GROBID integration and local fallback."""
 import re
 import logging
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -121,6 +122,8 @@ def _parse_grobid_tei(xml_text: str) -> PaperParseResult:
 def parse_paper_grobid(pdf_path: str, grobid_url: str | None = None) -> PaperParseResult:
     """Parse a SCI PDF using GROBID service."""
     grobid_url = grobid_url or getattr(settings, "grobid_url", "http://localhost:8070")
+    t0 = time.monotonic()
+    logger.info("Parse paper with GROBID start path=%s grobid_url=%s", pdf_path, grobid_url)
 
     try:
         with open(pdf_path, "rb") as f:
@@ -132,7 +135,16 @@ def parse_paper_grobid(pdf_path: str, grobid_url: str | None = None) -> PaperPar
                     data={"generateIDs": "true", "consolidateHeader": "1", "consolidateCitations": "1"},
                 )
                 resp.raise_for_status()
-                return _parse_grobid_tei(resp.text)
+                result = _parse_grobid_tei(resp.text)
+                logger.info(
+                    "Parse paper with GROBID complete path=%s title_present=%s section_count=%s reference_count=%s duration_ms=%.2f",
+                    pdf_path,
+                    bool(result.title),
+                    len(result.sections),
+                    len(result.references),
+                    (time.monotonic() - t0) * 1000,
+                )
+                return result
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
         logger.warning("GROBID unavailable (%s), falling back to local parser: %s", grobid_url, e)
         return parse_paper_local(pdf_path)
@@ -142,6 +154,8 @@ def parse_paper_local(pdf_path: str) -> PaperParseResult:
     """Parse a SCI PDF using local PyMuPDF as fallback."""
     import fitz
 
+    t0 = time.monotonic()
+    logger.info("Parse paper locally start path=%s", pdf_path)
     doc = fitz.open(pdf_path)
     result = PaperParseResult(parser="local_fallback")
 
@@ -154,6 +168,7 @@ def parse_paper_local(pdf_path: str) -> PaperParseResult:
 
     doc.close()
     result.raw_text = all_text
+    logger.debug("Parse paper local text extracted path=%s page_count=%s raw_text_length=%s", pdf_path, len(page_texts), len(all_text))
 
     lines = all_text.split("\n")
 
@@ -226,11 +241,26 @@ def parse_paper_local(pdf_path: str) -> PaperParseResult:
                 content=content,
             ))
 
+    logger.info(
+        "Parse paper locally complete path=%s title_present=%s abstract_length=%s section_count=%s raw_text_length=%s duration_ms=%.2f",
+        pdf_path,
+        bool(result.title),
+        len(result.abstract or ""),
+        len(result.sections),
+        len(result.raw_text or ""),
+        (time.monotonic() - t0) * 1000,
+    )
     return result
 
 
 def paper_to_chunkable_text(result: PaperParseResult) -> str:
     """Convert a PaperParseResult into text suitable for chunking."""
+    logger.debug(
+        "Convert paper to chunkable text title_present=%s author_count=%s section_count=%s",
+        bool(result.title),
+        len(result.authors),
+        len(result.sections),
+    )
     parts = []
 
     if result.title:
@@ -266,6 +296,7 @@ def paper_to_chunkable_text(result: PaperParseResult) -> str:
 def paper_references_to_text(result: PaperParseResult) -> str:
     """Convert references to chunkable text."""
     if not result.references:
+        logger.debug("Convert paper references skipped reason=no_references")
         return ""
     parts = ["## References"]
     for i, ref in enumerate(result.references, 1):
@@ -277,4 +308,6 @@ def paper_references_to_text(result: PaperParseResult) -> str:
         if ref.get("year"):
             ref_parts.append(f"({ref['year']})")
         parts.append(f"[{i}] {'. '.join(ref_parts)}")
-    return "\n".join(parts)
+    text = "\n".join(parts)
+    logger.info("Convert paper references complete reference_count=%s text_length=%s", len(result.references), len(text))
+    return text

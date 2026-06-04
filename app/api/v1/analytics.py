@@ -43,6 +43,14 @@ async def submit_feedback(
 ):
     """Submit feedback for an answer."""
     org_id = str(user["org_id"])
+    logger.info(
+        "Submit feedback request org_id=%s user_id=%s message_id=%s rating=%s reason_count=%s",
+        org_id,
+        user["user_id"],
+        message_id,
+        data.rating,
+        len(data.reason_tags or []),
+    )
     feedback = AnswerFeedback(
         id=uuid.uuid4(),
         org_id=org_id,
@@ -67,6 +75,7 @@ async def submit_feedback(
         details={"rating": data.rating, "reason_tags": data.reason_tags},
     )
 
+    logger.info("Submit feedback succeeded org_id=%s user_id=%s message_id=%s feedback_id=%s", org_id, user["user_id"], message_id, feedback.id)
     return feedback
 
 
@@ -80,6 +89,13 @@ async def create_eval_set(
 ):
     """Create an evaluation set with questions."""
     org_id = str(user["org_id"])
+    logger.info(
+        "Create evaluation set request org_id=%s user_id=%s name=%s question_count=%s",
+        org_id,
+        user["user_id"],
+        data.name,
+        len(data.questions),
+    )
 
     eval_set = EvaluationSet(
         id=uuid.uuid4(),
@@ -109,6 +125,7 @@ async def create_eval_set(
         db.add(question)
 
     await db.commit()
+    logger.info("Create evaluation set succeeded org_id=%s user_id=%s eval_set_id=%s", org_id, user["user_id"], eval_set.id)
     return eval_set
 
 
@@ -121,6 +138,7 @@ async def list_eval_sets(
 ):
     """List evaluation sets for the org."""
     org_id = str(user["org_id"])
+    logger.info("List evaluation sets request org_id=%s user_id=%s limit=%s offset=%s", org_id, user["user_id"], limit, offset)
 
     stmt = select(EvaluationSet).where(
         EvaluationSet.org_id == org_id,
@@ -138,6 +156,7 @@ async def list_eval_sets(
         q_stmt = select(func.count()).where(EvaluationQuestion.eval_set_id == item.id)
         item.question_count = (await db.execute(q_stmt)).scalar() or 0
 
+    logger.info("List evaluation sets complete org_id=%s user_id=%s total=%s returned=%s", org_id, user["user_id"], total, len(items))
     return EvalSetListResponse(items=items, total=total)
 
 
@@ -149,12 +168,15 @@ async def get_eval_set(
 ):
     """Get an evaluation set by ID."""
     org_id = str(user["org_id"])
+    logger.info("Get evaluation set request org_id=%s user_id=%s eval_set_id=%s", org_id, user["user_id"], eval_set_id)
     eval_set = await db.get(EvaluationSet, eval_set_id)
     if not eval_set or str(eval_set.org_id) != org_id:
+        logger.warning("Get evaluation set failed org_id=%s user_id=%s eval_set_id=%s reason=not_found", org_id, user["user_id"], eval_set_id)
         raise HTTPException(status_code=404, detail="Evaluation set not found")
 
     q_stmt = select(func.count()).where(EvaluationQuestion.eval_set_id == eval_set_id)
     eval_set.question_count = (await db.execute(q_stmt)).scalar() or 0
+    logger.info("Get evaluation set succeeded org_id=%s user_id=%s eval_set_id=%s question_count=%s", org_id, user["user_id"], eval_set_id, eval_set.question_count)
     return eval_set
 
 
@@ -166,10 +188,12 @@ async def list_eval_questions(
 ):
     """List questions in an evaluation set."""
     org_id = str(user["org_id"])
+    logger.info("List evaluation questions request org_id=%s user_id=%s eval_set_id=%s", org_id, user["user_id"], eval_set_id)
 
     # Verify eval set belongs to org
     eval_set = await db.get(EvaluationSet, eval_set_id)
     if not eval_set or str(eval_set.org_id) != org_id:
+        logger.warning("List evaluation questions failed org_id=%s user_id=%s eval_set_id=%s reason=eval_set_not_found", org_id, user["user_id"], eval_set_id)
         raise HTTPException(status_code=404, detail="Evaluation set not found")
 
     stmt = (
@@ -178,7 +202,9 @@ async def list_eval_questions(
         .order_by(EvaluationQuestion.created_at.asc())
     )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    questions = list(result.scalars().all())
+    logger.info("List evaluation questions complete org_id=%s user_id=%s eval_set_id=%s returned=%s", org_id, user["user_id"], eval_set_id, len(questions))
+    return questions
 
 
 # --- Evaluation Runs ---
@@ -191,10 +217,12 @@ async def run_evaluation(
 ):
     """Run an evaluation against an evaluation set."""
     org_id = str(user["org_id"])
+    logger.info("Run evaluation request org_id=%s user_id=%s eval_set_id=%s", org_id, user["user_id"], data.eval_set_id)
 
     # Verify eval set belongs to org
     eval_set = await db.get(EvaluationSet, data.eval_set_id)
     if not eval_set or str(eval_set.org_id) != org_id:
+        logger.warning("Run evaluation failed org_id=%s user_id=%s eval_set_id=%s reason=eval_set_not_found", org_id, user["user_id"], data.eval_set_id)
         raise HTTPException(status_code=404, detail="Evaluation set not found")
 
     # Create evaluation run
@@ -216,6 +244,7 @@ async def run_evaluation(
         "run_evaluation",
         args=[org_id, str(run.id), str(data.eval_set_id), data.config],
     )
+    logger.info("Run evaluation task queued org_id=%s user_id=%s eval_set_id=%s run_id=%s", org_id, user["user_id"], data.eval_set_id, run.id)
 
     # Audit log
     from app.services.audit import write_audit_log
@@ -228,6 +257,7 @@ async def run_evaluation(
         details={"eval_set_id": str(data.eval_set_id), "config": data.config},
     )
 
+    logger.info("Run evaluation request accepted org_id=%s user_id=%s run_id=%s", org_id, user["user_id"], run.id)
     return run
 
 
@@ -239,9 +269,12 @@ async def get_evaluation_run(
 ):
     """Get evaluation run status and results."""
     org_id = str(user["org_id"])
+    logger.info("Get evaluation run request org_id=%s user_id=%s run_id=%s", org_id, user["user_id"], run_id)
     run = await db.get(EvaluationRun, run_id)
     if not run or str(run.org_id) != org_id:
+        logger.warning("Get evaluation run failed org_id=%s user_id=%s run_id=%s reason=not_found", org_id, user["user_id"], run_id)
         raise HTTPException(status_code=404, detail="Evaluation run not found")
+    logger.info("Get evaluation run succeeded org_id=%s user_id=%s run_id=%s status=%s", org_id, user["user_id"], run_id, run.status)
     return run
 
 
@@ -255,6 +288,7 @@ async def get_zero_result_queries(
 ):
     """Get zero-result queries for the org."""
     org_id = str(user["org_id"])
+    logger.info("Get zero-result queries request org_id=%s user_id=%s limit=%s", org_id, user["user_id"], limit)
     from app.services.clickhouse import clickhouse_client
     rows = await clickhouse_client.get_zero_result_queries(org_id, limit)
 
@@ -273,6 +307,7 @@ async def get_zero_result_queries(
             last_seen=row.get("last_seen", ""),
         ))
 
+    logger.info("Get zero-result queries complete org_id=%s user_id=%s returned=%s", org_id, user["user_id"], len(items))
     return ZeroResultQueryResponse(items=items, total=len(items))
 
 
@@ -284,6 +319,7 @@ async def get_low_rated_answers(
 ):
     """Get low-rated answers for the org."""
     org_id = str(user["org_id"])
+    logger.info("Get low-rated answers request org_id=%s user_id=%s limit=%s", org_id, user["user_id"], limit)
     from app.services.clickhouse import clickhouse_client
     rows = await clickhouse_client.get_low_rated_answers(org_id, limit)
 
@@ -306,6 +342,7 @@ async def get_low_rated_answers(
             created_at=feedback.created_at if feedback else None,
         ))
 
+    logger.info("Get low-rated answers complete org_id=%s user_id=%s returned=%s", org_id, user["user_id"], len(items))
     return LowRatedAnswerResponse(items=items, total=len(items))
 
 
@@ -316,8 +353,10 @@ async def get_analytics_summary(
 ):
     """Get RAG analytics summary for the org."""
     org_id = str(user["org_id"])
+    logger.info("Get analytics summary request org_id=%s user_id=%s", org_id, user["user_id"])
     from app.services.clickhouse import clickhouse_client
     summary = await clickhouse_client.get_analytics_summary(org_id)
+    logger.info("Get analytics summary complete org_id=%s user_id=%s keys=%s", org_id, user["user_id"], list(summary.keys()))
     return RAGAnalyticsSummary(**summary)
 
 
@@ -334,6 +373,15 @@ async def get_audit_logs(
 ):
     """Get audit logs for the org."""
     org_id = str(user["org_id"])
+    logger.info(
+        "Get audit logs request org_id=%s user_id=%s action=%s resource_type=%s limit=%s offset=%s",
+        org_id,
+        user["user_id"],
+        action,
+        resource_type,
+        limit,
+        offset,
+    )
     from app.services.audit import query_audit_logs
     items, total = await query_audit_logs(
         org_id=org_id,
@@ -342,6 +390,7 @@ async def get_audit_logs(
         limit=limit,
         offset=offset,
     )
+    logger.info("Get audit logs complete org_id=%s user_id=%s total=%s returned=%s", org_id, user["user_id"], total, len(items))
     return AuditLogListResponse(
         items=[AuditLogResponse.model_validate(i) for i in items],
         total=total,

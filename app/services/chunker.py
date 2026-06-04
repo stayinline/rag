@@ -1,8 +1,10 @@
+import logging
 import re
 import tiktoken
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 enc = tiktoken.get_encoding("cl100k_base")
 
 
@@ -17,6 +19,13 @@ def chunk_text(text: str, title: str = "") -> list[dict]:
     """
     chunk_size = settings.rag_chunk_size
     overlap = settings.rag_chunk_overlap
+    logger.info(
+        "Chunk text start title=%s text_length=%s chunk_size=%s overlap=%s",
+        title,
+        len(text or ""),
+        chunk_size,
+        overlap,
+    )
 
     lines = text.split("\n")
     sections: list[tuple[str, str]] = []
@@ -36,6 +45,7 @@ def chunk_text(text: str, title: str = "") -> list[dict]:
 
     if current_lines:
         sections.append((current_section_title, "\n".join(current_lines)))
+    logger.debug("Chunk text sections identified title=%s section_count=%s", title, len(sections))
 
     chunks = []
     current_path = title
@@ -69,4 +79,10 @@ def chunk_text(text: str, title: str = "") -> list[dict]:
 
                 start = end - (overlap // 5) if end < len(words) else end
 
+    logger.info(
+        "Chunk text complete title=%s section_count=%s chunk_count=%s",
+        title,
+        len(sections),
+        len(chunks),
+    )
     return chunks

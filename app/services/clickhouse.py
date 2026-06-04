@@ -80,6 +80,7 @@ class ClickHouseClient:
         """Write a RAG trace event to ClickHouse."""
         try:
             import httpx
+            logger.debug("ClickHouse write trace start trace_id=%s org_id=%s", event.trace_id, event.org_id)
             query = """
                 INSERT INTO rag_trace_events
                 (event_time, trace_id, org_id, user_id, scenario, query_hash, query_text,
@@ -106,7 +107,18 @@ class ClickHouseClient:
                     self.url,
                     params={**self._params(full_query), "default_format": "Values"},
                 )
-                return resp.status_code == 200
+                ok = resp.status_code == 200
+                if ok:
+                    logger.info("ClickHouse write trace complete trace_id=%s org_id=%s", event.trace_id, event.org_id)
+                else:
+                    logger.warning(
+                        "ClickHouse write trace returned non-200 trace_id=%s org_id=%s status_code=%s body_preview=%s",
+                        event.trace_id,
+                        event.org_id,
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                return ok
         except Exception as e:
             logger.warning("Failed to write trace event to ClickHouse: %s", e)
             return False
@@ -115,6 +127,7 @@ class ClickHouseClient:
         """Write a retrieval hit event to ClickHouse."""
         try:
             import httpx
+            logger.debug("ClickHouse write retrieval hit start trace_id=%s chunk_id=%s", event.trace_id, event.chunk_id)
             values = (
                 f"now(), '{event.trace_id}', '{event.org_id}', '{event.query_hash}', "
                 f"'{event.chunk_id}', '{event.document_id}', {event.rank_before}, "
@@ -133,7 +146,18 @@ class ClickHouseClient:
                     self.url,
                     params=self._params(query),
                 )
-                return resp.status_code == 200
+                ok = resp.status_code == 200
+                if ok:
+                    logger.debug("ClickHouse write retrieval hit complete trace_id=%s chunk_id=%s", event.trace_id, event.chunk_id)
+                else:
+                    logger.warning(
+                        "ClickHouse write retrieval hit returned non-200 trace_id=%s chunk_id=%s status_code=%s body_preview=%s",
+                        event.trace_id,
+                        event.chunk_id,
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                return ok
         except Exception as e:
             logger.warning("Failed to write retrieval hit to ClickHouse: %s", e)
             return False
@@ -144,6 +168,7 @@ class ClickHouseClient:
         """Get zero-result queries for an org."""
         try:
             import httpx
+            logger.info("ClickHouse query zero-result start org_id=%s limit=%s", org_id, limit)
             query = f"""
                 SELECT query_text, org_id, user_id, kb_ids, count() as cnt, max(event_time) as last_seen
                 FROM rag_trace_events
@@ -157,7 +182,10 @@ class ClickHouseClient:
                 resp = await client.post(self.url, params=self._params(query))
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("data", [])
+                    rows = data.get("data", [])
+                    logger.info("ClickHouse query zero-result complete org_id=%s returned=%s", org_id, len(rows))
+                    return rows
+                logger.warning("ClickHouse query zero-result returned non-200 org_id=%s status_code=%s body_preview=%s", org_id, resp.status_code, resp.text[:300])
             return []
         except Exception as e:
             logger.warning("Failed to query zero-result queries: %s", e)
@@ -169,6 +197,7 @@ class ClickHouseClient:
         """Get low-rated answers for an org."""
         try:
             import httpx
+            logger.info("ClickHouse query low-rated answers start org_id=%s limit=%s", org_id, limit)
             query = f"""
                 SELECT trace_id, query_text, rating
                 FROM rag_trace_events
@@ -181,7 +210,10 @@ class ClickHouseClient:
                 resp = await client.post(self.url, params=self._params(query))
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("data", [])
+                    rows = data.get("data", [])
+                    logger.info("ClickHouse query low-rated answers complete org_id=%s returned=%s", org_id, len(rows))
+                    return rows
+                logger.warning("ClickHouse query low-rated answers returned non-200 org_id=%s status_code=%s body_preview=%s", org_id, resp.status_code, resp.text[:300])
             return []
         except Exception as e:
             logger.warning("Failed to query low-rated answers: %s", e)
@@ -191,6 +223,7 @@ class ClickHouseClient:
         """Get RAG analytics summary for an org."""
         try:
             import httpx
+            logger.info("ClickHouse analytics summary start org_id=%s", org_id)
             query = f"""
                 SELECT
                     count() as total_queries,
@@ -212,7 +245,7 @@ class ClickHouseClient:
                     if rows:
                         row = rows[0]
                         total = row.get("total_queries", 0)
-                        return {
+                        summary = {
                             "total_queries": total,
                             "avg_latency_ms": round(float(row.get("avg_latency_ms", 0)), 1),
                             "avg_rating": round(float(row.get("avg_rating", 0)), 2),
@@ -221,6 +254,10 @@ class ClickHouseClient:
                             "zero_result_rate": round(row.get("zero_results", 0) / max(total, 1), 4),
                             "low_rating_rate": round(row.get("low_ratings", 0) / max(total, 1), 4),
                         }
+                        logger.info("ClickHouse analytics summary complete org_id=%s total_queries=%s", org_id, total)
+                        return summary
+                else:
+                    logger.warning("ClickHouse analytics summary returned non-200 org_id=%s status_code=%s body_preview=%s", org_id, resp.status_code, resp.text[:300])
             return {}
         except Exception as e:
             logger.warning("Failed to get analytics summary: %s", e)

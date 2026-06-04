@@ -1,3 +1,5 @@
+import logging
+
 import weaviate
 import weaviate.classes.config as wc
 from weaviate.connect import ConnectionParams
@@ -5,8 +7,11 @@ from weaviate.classes.config import Configure
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 def get_client() -> weaviate.WeaviateClient:
+    logger.debug("Create Weaviate client url=%s grpc_port=%s", settings.weaviate_url, settings.weaviate_grpc_port)
     return weaviate.WeaviateClient(
         connection_params=ConnectionParams.from_url(
             settings.weaviate_url,
@@ -42,9 +47,18 @@ COLLECTION_PROPERTIES = [
 
 
 def ensure_collection(client: weaviate.WeaviateClient) -> None:
+    logger.info("Ensure Weaviate collection start collection=%s", COLLECTION_NAME)
     if not client.collections.exists(COLLECTION_NAME):
+        logger.info(
+            "Weaviate collection missing; creating collection=%s property_count=%s",
+            COLLECTION_NAME,
+            len(COLLECTION_PROPERTIES),
+        )
         client.collections.create(
             name=COLLECTION_NAME,
             vectorizer_config=Configure.Vectorizer.none(),
             properties=COLLECTION_PROPERTIES,
         )
+        logger.info("Weaviate collection created collection=%s", COLLECTION_NAME)
+    else:
+        logger.info("Weaviate collection exists collection=%s", COLLECTION_NAME)

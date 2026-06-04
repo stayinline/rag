@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -17,6 +18,8 @@ from app.services.metadata_enhancer import enhance_via_crossref, enhance_via_pub
 from app.services.weaviate_client import COLLECTION_NAME, get_client
 from app.workers.celery_app import celery_app
 
+logger = logging.getLogger(__name__)
+
 
 def _make_idEMPOTENCY_KEY(org_id: str, document_id: str, version_id: str, job_type: str) -> str:
     return f"{org_id}:{document_id}:{version_id}:{job_type}"
@@ -34,6 +37,14 @@ def parse_document_task(
     import os
 
     try:
+        logger.info(
+            "Task parse_document start task_id=%s org_id=%s document_id=%s version_id=%s storage_path=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            storage_path,
+        )
         text = parse_file(storage_path)
         parsed_filename = f"{document_id}_parsed.txt"
         parsed_path = os.path.join(settings.storage_path, "parsed", parsed_filename)
@@ -41,6 +52,15 @@ def parse_document_task(
         with open(parsed_path, "w", encoding="utf-8") as f:
             f.write(text)
 
+        logger.info(
+            "Task parse_document complete task_id=%s org_id=%s document_id=%s version_id=%s parsed_path=%s text_length=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            parsed_path,
+            len(text),
+        )
         return {
             "org_id": org_id,
             "document_id": document_id,
@@ -50,6 +70,14 @@ def parse_document_task(
         }
 
     except Exception as e:
+        logger.exception(
+            "Task parse_document failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            self.request.retries,
+        )
         raise self.retry(exc=e, countdown=30)
 
 
@@ -66,20 +94,56 @@ def chunk_and_embed_task(
 ) -> dict:
     """Chunk parsed text, generate embeddings, and write to Weaviate."""
     try:
+        logger.info(
+            "Task chunk_and_embed start task_id=%s org_id=%s document_id=%s version_id=%s kb_id=%s parsed_path=%s batch_size=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            kb_id,
+            parsed_path,
+            batch_size,
+        )
         with open(parsed_path, "r", encoding="utf-8") as f:
             text = f.read()
+        logger.info(
+            "Task chunk_and_embed parsed text loaded task_id=%s document_id=%s text_length=%s",
+            self.request.id,
+            document_id,
+            len(text),
+        )
 
         chunks = chunk_text(text, title=title)
+        logger.info(
+            "Task chunk_and_embed chunking complete task_id=%s document_id=%s chunk_count=%s",
+            self.request.id,
+            document_id,
+            len(chunks),
+        )
 
         # Batch embed
         all_vectors = []
         for i in range(0, len(chunks), batch_size):
             batch = [c["content"] for c in chunks[i:i + batch_size]]
+            logger.info(
+                "Task chunk_and_embed embedding batch task_id=%s document_id=%s batch_start=%s batch_size=%s",
+                self.request.id,
+                document_id,
+                i,
+                len(batch),
+            )
             vectors = embed_texts(batch)
             all_vectors.extend(vectors)
+        logger.info(
+            "Task chunk_and_embed embedding complete task_id=%s document_id=%s vector_count=%s",
+            self.request.id,
+            document_id,
+            len(all_vectors),
+        )
 
         # Write to Weaviate
         client = get_client()
+        logger.info("Task chunk_and_embed connecting Weaviate task_id=%s document_id=%s", self.request.id, document_id)
         client.connect()
         try:
             collection = client.collections.get(COLLECTION_NAME)
@@ -114,6 +178,12 @@ def chunk_and_embed_task(
                 )
                 chunk_ids.append(weaviate_uuid)
 
+            logger.info(
+                "Task chunk_and_embed Weaviate insert complete task_id=%s document_id=%s chunk_count=%s",
+                self.request.id,
+                document_id,
+                len(chunk_ids),
+            )
             return {
                 "org_id": org_id,
                 "document_id": document_id,
@@ -124,8 +194,17 @@ def chunk_and_embed_task(
             }
         finally:
             client.close()
+            logger.debug("Task chunk_and_embed Weaviate client closed task_id=%s document_id=%s", self.request.id, document_id)
 
     except Exception as e:
+        logger.exception(
+            "Task chunk_and_embed failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            self.request.retries,
+        )
         raise self.retry(exc=e, countdown=60)
 
 
@@ -139,6 +218,13 @@ def chunk_and_embed_from_parse_task(
 ) -> dict:
     """Continue a document ingestion chain after parsing."""
     try:
+        logger.info(
+            "Task chunk_and_embed_from_parse start task_id=%s document_id=%s kb_id=%s text_length=%s",
+            self.request.id,
+            parse_result.get("document_id"),
+            kb_id,
+            parse_result.get("text_length"),
+        )
         return chunk_and_embed_task(
             parse_result["org_id"],
             parse_result["document_id"],
@@ -149,6 +235,12 @@ def chunk_and_embed_from_parse_task(
             batch_size,
         )
     except Exception as e:
+        logger.exception(
+            "Task chunk_and_embed_from_parse failed task_id=%s document_id=%s retry=%s",
+            self.request.id,
+            parse_result.get("document_id"),
+            self.request.retries,
+        )
         raise self.retry(exc=e, countdown=60)
 
 
@@ -164,6 +256,15 @@ def publish_document_task(
 ) -> dict:
     """Switch document from draft to ready status."""
     try:
+        logger.info(
+            "Task publish_document start task_id=%s org_id=%s document_id=%s version_id=%s kb_id=%s chunk_count=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            kb_id,
+            chunk_count,
+        )
         async def _update():
             async with async_session() as session:
                 # Update document status
@@ -192,26 +293,57 @@ def publish_document_task(
 
         import asyncio
         asyncio.run(_update())
+        logger.info(
+            "Task publish_document database update complete task_id=%s document_id=%s version_id=%s",
+            self.request.id,
+            document_id,
+            version_id,
+        )
 
         # Update Weaviate chunks status to ready
         client = get_client()
+        logger.info("Task publish_document connecting Weaviate task_id=%s document_id=%s", self.request.id, document_id)
         client.connect()
         try:
             collection = client.collections.get(COLLECTION_NAME)
+            updated_count = 0
             for cid in chunk_ids:
                 try:
                     collection.data.update(
                         uuid=cid,
                         properties={"status": "ready"},
                     )
+                    updated_count += 1
                 except Exception:
-                    pass
+                    logger.warning(
+                        "Task publish_document Weaviate chunk update failed task_id=%s document_id=%s chunk_id=%s",
+                        self.request.id,
+                        document_id,
+                        cid,
+                        exc_info=True,
+                    )
+            logger.info(
+                "Task publish_document Weaviate update complete task_id=%s document_id=%s updated_chunks=%s requested_chunks=%s",
+                self.request.id,
+                document_id,
+                updated_count,
+                len(chunk_ids),
+            )
         finally:
             client.close()
 
+        logger.info("Task publish_document complete task_id=%s document_id=%s status=ready", self.request.id, document_id)
         return {"document_id": document_id, "status": "ready", "chunk_count": chunk_count}
 
     except Exception as e:
+        logger.exception(
+            "Task publish_document failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
+            self.request.id,
+            org_id,
+            document_id,
+            version_id,
+            self.request.retries,
+        )
         raise self.retry(exc=e, countdown=30)
 
 
@@ -219,6 +351,12 @@ def publish_document_task(
 def publish_document_from_chunks_task(self, embed_result: dict) -> dict:
     """Publish a document after chunking and embedding has completed."""
     try:
+        logger.info(
+            "Task publish_document_from_chunks start task_id=%s document_id=%s chunk_count=%s",
+            self.request.id,
+            embed_result.get("document_id"),
+            embed_result.get("chunk_count"),
+        )
         return publish_document_task(
             embed_result["org_id"],
             embed_result["document_id"],
@@ -228,6 +366,12 @@ def publish_document_from_chunks_task(self, embed_result: dict) -> dict:
             embed_result["chunk_ids"],
         )
     except Exception as e:
+        logger.exception(
+            "Task publish_document_from_chunks failed task_id=%s document_id=%s retry=%s",
+            self.request.id,
+            embed_result.get("document_id"),
+            self.request.retries,
+        )
         raise self.retry(exc=e, countdown=30)
 
 
@@ -245,8 +389,29 @@ def parse_paper_task(
 ) -> dict:
     """Parse a SCI PDF paper, enhance metadata, chunk, and embed."""
     try:
+        logger.info(
+            "Task parse_paper start task_id=%s org_id=%s paper_id=%s document_id=%s version_id=%s kb_id=%s storage_path=%s doi=%s pmid=%s",
+            self.request.id,
+            org_id,
+            paper_id,
+            document_id,
+            version_id,
+            kb_id,
+            storage_path,
+            doi,
+            pmid,
+        )
         # Step 1: Parse the PDF
         parse_result = parse_paper_local(storage_path)
+        logger.info(
+            "Task parse_paper parse complete task_id=%s paper_id=%s title_present=%s abstract_length=%s section_count=%s parser=%s",
+            self.request.id,
+            paper_id,
+            bool(parse_result.title),
+            len(parse_result.abstract or ""),
+            len(parse_result.sections),
+            parse_result.parser,
+        )
         if doi:
             crossref_meta = enhance_via_crossref(doi)
             if crossref_meta:
@@ -256,17 +421,43 @@ def parse_paper_task(
                     parse_result.abstract = crossref_meta.abstract
                 if crossref_meta.journal:
                     parse_result.journal = crossref_meta.journal
+                logger.info(
+                    "Task parse_paper CrossRef enhancement applied task_id=%s paper_id=%s doi=%s has_title=%s has_abstract=%s",
+                    self.request.id,
+                    paper_id,
+                    doi,
+                    bool(crossref_meta.title),
+                    bool(crossref_meta.abstract),
+                )
+            else:
+                logger.warning("Task parse_paper CrossRef enhancement returned no metadata task_id=%s paper_id=%s doi=%s", self.request.id, paper_id, doi)
         if pmid:
             pubmed_meta = enhance_via_pubmed(pmid)
             if pubmed_meta:
                 if not parse_result.title and pubmed_meta.title:
                     parse_result.title = pubmed_meta.title
+                logger.info(
+                    "Task parse_paper PubMed enhancement applied task_id=%s paper_id=%s pmid=%s has_title=%s mesh_count=%s",
+                    self.request.id,
+                    paper_id,
+                    pmid,
+                    bool(pubmed_meta.title),
+                    len(pubmed_meta.mesh_terms),
+                )
+            else:
+                logger.warning("Task parse_paper PubMed enhancement returned no metadata task_id=%s paper_id=%s pmid=%s", self.request.id, paper_id, pmid)
 
         # Step 2: Extract medical entities
         full_text = (parse_result.abstract or "") + " " + " ".join(
             s.content for s in parse_result.sections
         )
         entities = extract_medical_entities(full_text)
+        logger.info(
+            "Task parse_paper entities extracted task_id=%s paper_id=%s entity_counts=%s",
+            self.request.id,
+            paper_id,
+            {k: len(v) for k, v in entities.items()},
+        )
 
         # Step 3: Update Paper record with parsed data
         import asyncio
@@ -300,6 +491,12 @@ def parse_paper_task(
                     await session.commit()
 
         asyncio.run(_update_paper())
+        logger.info(
+            "Task parse_paper paper record updated task_id=%s paper_id=%s resolved_kb_id=%s",
+            self.request.id,
+            paper_id,
+            resolved_kb_id,
+        )
 
         # Step 4: Chunk parsed paper content
         ref_text = paper_references_to_text(parse_result)
@@ -318,17 +515,33 @@ def parse_paper_task(
                 "page_end": None,
                 "boost": 0.5,
             })
+        logger.info(
+            "Task parse_paper chunking complete task_id=%s paper_id=%s chunk_count=%s reference_text_length=%s",
+            self.request.id,
+            paper_id,
+            len(paper_chunks),
+            len(ref_text),
+        )
 
         # Step 5: Embed chunks
         batch_size = 10
         all_vectors = []
         for i in range(0, len(paper_chunks), batch_size):
             batch = [c["content"] for c in paper_chunks[i:i + batch_size]]
+            logger.info(
+                "Task parse_paper embedding batch task_id=%s paper_id=%s batch_start=%s batch_size=%s",
+                self.request.id,
+                paper_id,
+                i,
+                len(batch),
+            )
             vectors = embed_texts(batch)
             all_vectors.extend(vectors)
+        logger.info("Task parse_paper embedding complete task_id=%s paper_id=%s vector_count=%s", self.request.id, paper_id, len(all_vectors))
 
         # Step 6: Write to Weaviate
         client = get_client()
+        logger.info("Task parse_paper connecting Weaviate task_id=%s paper_id=%s", self.request.id, paper_id)
         client.connect()
         try:
             collection = client.collections.get(COLLECTION_NAME)
@@ -362,8 +575,10 @@ def parse_paper_task(
                     vector=vector,
                 )
                 chunk_ids.append(weaviate_uuid)
+            logger.info("Task parse_paper Weaviate insert complete task_id=%s paper_id=%s chunk_count=%s", self.request.id, paper_id, len(chunk_ids))
         finally:
             client.close()
+            logger.debug("Task parse_paper Weaviate client closed task_id=%s paper_id=%s", self.request.id, paper_id)
 
         # Step 7: Update document status
         async def _finalize():
@@ -386,6 +601,13 @@ def parse_paper_task(
                 await session.commit()
 
         asyncio.run(_finalize())
+        logger.info(
+            "Task parse_paper finalize complete task_id=%s paper_id=%s document_id=%s chunk_count=%s",
+            self.request.id,
+            paper_id,
+            document_id,
+            len(paper_chunks),
+        )
 
         return {
             "paper_id": paper_id,
@@ -397,6 +619,15 @@ def parse_paper_task(
         }
 
     except Exception as e:
+        logger.exception(
+            "Task parse_paper failed task_id=%s org_id=%s paper_id=%s document_id=%s version_id=%s retry=%s",
+            self.request.id,
+            org_id,
+            paper_id,
+            document_id,
+            version_id,
+            self.request.retries,
+        )
         raise self.retry(exc=e, countdown=30)
 
 
@@ -415,6 +646,13 @@ def run_evaluation_task(
     from app.services.rag import hybrid_search
 
     try:
+        logger.info(
+            "Task run_evaluation start task_id=%s org_id=%s run_id=%s eval_set_id=%s",
+            self.request.id,
+            org_id,
+            run_id,
+            eval_set_id,
+        )
         async def _run():
             async with async_session() as session:
                 # Update run status to running
@@ -424,6 +662,7 @@ def run_evaluation_task(
                     .values(status="running")
                 )
                 await session.commit()
+                logger.info("Task run_evaluation status updated task_id=%s run_id=%s status=running", self.request.id, run_id)
 
                 # Get questions
                 q_stmt = select(EvaluationQuestion).where(
@@ -432,6 +671,12 @@ def run_evaluation_task(
                 )
                 result = await session.execute(q_stmt)
                 questions = list(result.scalars().all())
+                logger.info(
+                    "Task run_evaluation questions loaded task_id=%s run_id=%s question_count=%s",
+                    self.request.id,
+                    run_id,
+                    len(questions),
+                )
 
                 metrics = {
                     "total_questions": len(questions),
@@ -442,6 +687,14 @@ def run_evaluation_task(
                 }
 
                 for q in questions:
+                    logger.debug(
+                        "Task run_evaluation question search start task_id=%s run_id=%s question_id=%s expected_kb_count=%s expected_doc_count=%s",
+                        self.request.id,
+                        run_id,
+                        q.id,
+                        len(q.expected_kb_ids or []),
+                        len(q.expected_doc_ids or []),
+                    )
                     # Run search
                     sources = hybrid_search(
                         query=q.question,
@@ -450,6 +703,13 @@ def run_evaluation_task(
                         top_k=10,
                     )
                     retrieved_doc_ids = {s.document_id for s in sources}
+                    logger.debug(
+                        "Task run_evaluation question search complete task_id=%s run_id=%s question_id=%s source_count=%s",
+                        self.request.id,
+                        run_id,
+                        q.id,
+                        len(sources),
+                    )
 
                     metrics["answered"] += 1
                     if not sources:
@@ -482,11 +742,22 @@ def run_evaluation_task(
                     )
                 )
                 await session.commit()
+                logger.info("Task run_evaluation complete task_id=%s run_id=%s metrics=%s", self.request.id, run_id, metrics)
                 return metrics
 
-        return asyncio.run(_run())
+        metrics = asyncio.run(_run())
+        logger.info("Task run_evaluation finished task_id=%s run_id=%s", self.request.id, run_id)
+        return metrics
 
     except Exception as exc:
+        logger.exception(
+            "Task run_evaluation failed task_id=%s org_id=%s run_id=%s eval_set_id=%s retry=%s",
+            self.request.id,
+            org_id,
+            run_id,
+            eval_set_id,
+            self.request.retries,
+        )
         error_message = str(exc)
 
         async def _fail():
@@ -500,4 +771,5 @@ def run_evaluation_task(
 
         import asyncio
         asyncio.run(_fail())
+        logger.info("Task run_evaluation status updated task_id=%s run_id=%s status=failed", self.request.id, run_id)
         raise self.retry(exc=exc, countdown=60)

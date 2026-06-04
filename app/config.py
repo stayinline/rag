@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     # Application
     app_name: str = _field("RAG Knowledge Base", "APP_NAME")
     debug: bool = _field(_root("DEBUG", False), "DEBUG")
+    log_level: str = _field(_root("LOG_LEVEL", "INFO"), "LOG_LEVEL")
     secret_key: str = _field(_root("JWT_SECRET", "change-me-in-production"), "SECRET_KEY", "JWT_SECRET")
     api_prefix: str = _field("/api/v1", "API_PREFIX")
 

@@ -32,6 +32,13 @@ class RAGTrace:
 
     def add_step(self, step: str, duration_ms: float = 0, details: dict | None = None):
         """Add a trace step."""
+        logger.debug(
+            "RAG trace add step trace_id=%s step=%s duration_ms=%.2f details=%s",
+            self.trace_id,
+            step,
+            duration_ms,
+            details or {},
+        )
         self.steps.append(TraceStep(
             step=step,
             duration_ms=duration_ms,
@@ -100,6 +107,14 @@ class TraceCollector:
 
     def start_trace(self, trace_id: str, org_id: str, user_id: str, query: str, kb_ids: list[str]) -> RAGTrace:
         """Start a new trace."""
+        logger.info(
+            "RAG trace start trace_id=%s org_id=%s user_id=%s kb_count=%s query_length=%s",
+            trace_id,
+            org_id,
+            user_id,
+            len(kb_ids),
+            len(query or ""),
+        )
         trace = RAGTrace(
             trace_id=trace_id,
             org_id=org_id,
@@ -119,6 +134,9 @@ class TraceCollector:
         trace = self._traces.get(str(trace_id))
         if trace:
             trace.total_latency_ms = duration_ms
+            logger.info("RAG trace complete trace_id=%s duration_ms=%.2f", trace_id, duration_ms)
+        else:
+            logger.warning("RAG trace complete skipped trace_id=%s reason=not_found", trace_id)
 
 
 # Global collector

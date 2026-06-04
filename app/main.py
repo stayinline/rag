@@ -1,30 +1,42 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import router as v1_router
 from app.config import settings
+from app.logging_config import RequestLoggingMiddleware, setup_logging
 from app.services.weaviate_client import ensure_collection, get_client
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: ensure Weaviate collection exists
+    logger.info("Application startup begin app_name=%s debug=%s", settings.app_name, settings.debug)
     try:
+        logger.info(
+            "Initializing Weaviate collection url=%s grpc_port=%s",
+            settings.weaviate_url,
+            settings.weaviate_grpc_port,
+        )
         client = get_client()
         client.connect()
         try:
             ensure_collection(client)
+            logger.info("Weaviate collection ready")
         finally:
             client.close()
     except Exception as e:
-        print(f"Warning: Could not initialize Weaviate: {e}")
+        logger.warning("Could not initialize Weaviate during startup: %s", e, exc_info=True)
 
     yield
 
     # Shutdown
-    pass
+    logger.info("Application shutdown complete")
 
 
 app = FastAPI(
@@ -33,6 +45,8 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+app.add_middleware(RequestLoggingMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

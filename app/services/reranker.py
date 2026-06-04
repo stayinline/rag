@@ -1,5 +1,6 @@
 """Reranker service with abstract layer for pluggable backends."""
 import logging
+import time
 from abc import ABC, abstractmethod
 
 from app.config import settings
@@ -31,6 +32,8 @@ class MockReranker(BaseReranker):
     """
 
     def rerank(self, query: str, documents: list[str]) -> list[RerankerResult]:
+        t0 = time.monotonic()
+        logger.debug("Mock rerank start query_length=%s document_count=%s", len(query or ""), len(documents))
         query_terms = set(query.lower().split())
         results = []
         for i, doc in enumerate(documents):
@@ -42,6 +45,7 @@ class MockReranker(BaseReranker):
             length_bonus = min(len(doc) / 1000, 0.1)
             results.append(RerankerResult(index=i, score=score + length_bonus))
         results.sort(key=lambda r: r.score, reverse=True)
+        logger.debug("Mock rerank complete document_count=%s duration_ms=%.2f", len(documents), (time.monotonic() - t0) * 1000)
         return results
 
 
@@ -55,6 +59,8 @@ class BM25Reranker(BaseReranker):
     def rerank(self, query: str, documents: list[str]) -> list[RerankerResult]:
         import math
 
+        t0 = time.monotonic()
+        logger.debug("BM25 rerank start query_length=%s document_count=%s", len(query or ""), len(documents))
         query_terms = query.lower().split()
         n_docs = len(documents)
 
@@ -92,12 +98,14 @@ class BM25Reranker(BaseReranker):
             results.append(RerankerResult(index=i, score=score))
 
         results.sort(key=lambda r: r.score, reverse=True)
+        logger.debug("BM25 rerank complete document_count=%s duration_ms=%.2f", len(documents), (time.monotonic() - t0) * 1000)
         return results
 
 
 def get_reranker() -> BaseReranker:
     """Get configured reranker instance."""
     reranker_type = getattr(settings, "reranker_type", "bm25")
+    logger.debug("Resolve reranker type=%s", reranker_type)
     if reranker_type == "mock":
         return MockReranker()
     elif reranker_type == "bm25":

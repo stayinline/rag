@@ -1,9 +1,13 @@
+import logging
+import time
+
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
 from app.schemas.search import SearchRequest
 from app.services.rag import hybrid_search
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
 
@@ -12,7 +16,16 @@ async def search(
     data: SearchRequest,
     user: dict = Depends(get_current_user),
 ):
+    start = time.monotonic()
     kb_ids = [str(kb) for kb in data.kb_ids]
+    logger.info(
+        "Search request org_id=%s user_id=%s kb_count=%s top_k=%s query_length=%s",
+        user["org_id"],
+        user["user_id"],
+        len(kb_ids),
+        data.top_k,
+        len(data.query or ""),
+    )
     sources = hybrid_search(
         query=data.query,
         org_id=str(user["org_id"]),
@@ -35,6 +48,14 @@ async def search(
             "combined_score": s.score,
         })
 
+    logger.info(
+        "Search complete org_id=%s user_id=%s results=%s duration_ms=%.2f top_chunk_id=%s",
+        user["org_id"],
+        user["user_id"],
+        len(results),
+        (time.monotonic() - start) * 1000,
+        results[0]["chunk_id"] if results else None,
+    )
     return {
         "query": data.query,
         "total": len(results),

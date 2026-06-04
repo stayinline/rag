@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +9,7 @@ from app.database import get_db
 from app.models.kb import KnowledgeBase
 from app.schemas.kb import KBCreate, KBListResponse, KBResponse, KBUpdate
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/kbs", tags=["knowledge-bases"])
 
 
@@ -16,6 +19,7 @@ async def create_kb(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("Create KB request org_id=%s user_id=%s name=%s", user["org_id"], user["user_id"], data.name)
     kb = KnowledgeBase(
         org_id=user["org_id"],
         name=data.name,
@@ -25,6 +29,7 @@ async def create_kb(
     db.add(kb)
     await db.commit()
     await db.refresh(kb)
+    logger.info("Create KB succeeded org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb.id)
     return kb
 
 
@@ -33,6 +38,7 @@ async def list_kbs(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("List KBs request org_id=%s user_id=%s", user["org_id"], user["user_id"])
     stmt = select(KnowledgeBase).where(
         KnowledgeBase.org_id == user["org_id"],
         KnowledgeBase.deleted_at.is_(None),
@@ -42,6 +48,7 @@ async def list_kbs(
 
     result = await db.execute(stmt.order_by(KnowledgeBase.created_at.desc()))
     items = result.scalars().all()
+    logger.info("List KBs complete org_id=%s user_id=%s total=%s returned=%s", user["org_id"], user["user_id"], total, len(items))
     return {"items": items, "total": total}
 
 
@@ -51,6 +58,7 @@ async def get_kb(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("Get KB request org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb_id)
     stmt = select(KnowledgeBase).where(
         KnowledgeBase.id == kb_id,
         KnowledgeBase.org_id == user["org_id"],
@@ -58,7 +66,9 @@ async def get_kb(
     result = await db.execute(stmt)
     kb = result.scalar_one_or_none()
     if not kb:
+        logger.warning("Get KB failed org_id=%s user_id=%s kb_id=%s reason=not_found", user["org_id"], user["user_id"], kb_id)
         raise HTTPException(status_code=404, detail="Knowledge base not found")
+    logger.info("Get KB succeeded org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb_id)
     return kb
 
 
@@ -69,6 +79,13 @@ async def update_kb(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info(
+        "Update KB request org_id=%s user_id=%s kb_id=%s fields=%s",
+        user["org_id"],
+        user["user_id"],
+        kb_id,
+        list(data.model_dump(exclude_unset=True).keys()),
+    )
     stmt = select(KnowledgeBase).where(
         KnowledgeBase.id == kb_id,
         KnowledgeBase.org_id == user["org_id"],
@@ -76,6 +93,7 @@ async def update_kb(
     result = await db.execute(stmt)
     kb = result.scalar_one_or_none()
     if not kb:
+        logger.warning("Update KB failed org_id=%s user_id=%s kb_id=%s reason=not_found", user["org_id"], user["user_id"], kb_id)
         raise HTTPException(status_code=404, detail="Knowledge base not found")
 
     if data.name is not None:
@@ -87,6 +105,7 @@ async def update_kb(
 
     await db.commit()
     await db.refresh(kb)
+    logger.info("Update KB succeeded org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb_id)
     return kb
 
 
@@ -96,6 +115,7 @@ async def delete_kb(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("Delete KB request org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb_id)
     from sqlalchemy import update as sql_update
 
     stmt = select(KnowledgeBase).where(
@@ -105,6 +125,7 @@ async def delete_kb(
     result = await db.execute(stmt)
     kb = result.scalar_one_or_none()
     if not kb:
+        logger.warning("Delete KB failed org_id=%s user_id=%s kb_id=%s reason=not_found", user["org_id"], user["user_id"], kb_id)
         raise HTTPException(status_code=404, detail="Knowledge base not found")
 
     await db.execute(
@@ -113,3 +134,4 @@ async def delete_kb(
         .values(is_active=False)
     )
     await db.commit()
+    logger.info("Delete KB succeeded org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb_id)

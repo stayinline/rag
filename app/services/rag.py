@@ -92,14 +92,29 @@ def hybrid_search(
 ) -> list[RAGSource]:
     """Hybrid search with permission filters and optional query expansion."""
     t0 = time.monotonic()
+    logger.info(
+        "Hybrid search start org_id=%s kb_count=%s top_k=%s expand_query=%s query_length=%s",
+        org_id,
+        len(kb_ids),
+        top_k,
+        expand_query,
+        len(query or ""),
+    )
     queries = [query]
     if expand_query and getattr(settings, "query_expansion", True):
         rewrite_result = rewrite_query(query)
         queries = rewrite_result.expanded
+        logger.info(
+            "Hybrid search query rewrite complete org_id=%s expanded_count=%s entity_counts=%s",
+            org_id,
+            len(queries),
+            {k: len(v) for k, v in rewrite_result.entities.items()},
+        )
         if trace:
             trace.add_step("rewrite", details={"rewrite_count": len(queries)})
 
     client = get_client()
+    logger.debug("Hybrid search connecting to Weaviate collection=%s", COLLECTION_NAME)
     client.connect()
     try:
         collection = client.collections.get(COLLECTION_NAME)
@@ -109,7 +124,14 @@ def hybrid_search(
         seen_ids = set()
 
         for q in queries:
+            query_start = time.monotonic()
             query_vector = embed_text(q)
+            logger.debug(
+                "Hybrid search embedding ready org_id=%s query_length=%s vector_dims=%s",
+                org_id,
+                len(q or ""),
+                len(query_vector),
+            )
             response = collection.query.hybrid(
                 query=q,
                 vector=query_vector,
@@ -117,6 +139,13 @@ def hybrid_search(
                 limit=top_k,
                 alpha=0.5,
                 return_metadata=MetadataQuery(score=True),
+            )
+            logger.info(
+                "Hybrid search Weaviate query complete org_id=%s query_length=%s returned=%s duration_ms=%.2f",
+                org_id,
+                len(q or ""),
+                len(response.objects),
+                (time.monotonic() - query_start) * 1000,
             )
             for obj in response.objects:
                 obj_uuid = str(obj.uuid)
@@ -129,20 +158,38 @@ def hybrid_search(
         duration_ms = (time.monotonic() - t0) * 1000
         if trace:
             trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
+        logger.info(
+            "Hybrid search complete org_id=%s kb_count=%s expanded_count=%s unique_results=%s returned=%s duration_ms=%.2f",
+            org_id,
+            len(kb_ids),
+            len(queries),
+            len(all_results),
+            len(results),
+            duration_ms,
+        )
         return results
 
     finally:
         client.close()
+        logger.debug("Hybrid search Weaviate client closed org_id=%s", org_id)
 
 
 def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = None, trace: object = None) -> list[RAGSource]:
     """Rerank sources using the configured reranker."""
     t0 = time.monotonic()
     if not sources:
+        logger.info("Rerank skipped reason=no_sources query_length=%s", len(query or ""))
         return sources
 
     top_n = top_n or getattr(settings, "reranker_top_n", 10)
     reranker = get_reranker()
+    logger.info(
+        "Rerank start reranker=%s source_count=%s top_n=%s query_length=%s",
+        reranker.__class__.__name__,
+        len(sources),
+        top_n,
+        len(query or ""),
+    )
 
     documents = [s.content_preview for s in sources]
     results = reranker.rerank(query, documents)
@@ -156,11 +203,19 @@ def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = Non
     duration_ms = (time.monotonic() - t0) * 1000
     if trace:
         trace.add_step("rerank", duration_ms=duration_ms, details={"reranked_count": len(reranked)})
+    logger.info(
+        "Rerank complete reranker=%s input_count=%s returned=%s duration_ms=%.2f",
+        reranker.__class__.__name__,
+        len(sources),
+        len(reranked),
+        duration_ms,
+    )
     return reranked
 
 
 def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
     """Build context string from sources and return citation info."""
+    t0 = time.monotonic()
     context_parts = []
     citations = []
 
@@ -173,7 +228,15 @@ def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
         )
         citations.append(source.to_dict())
 
-    return "\n---\n".join(context_parts), citations
+    context = "\n---\n".join(context_parts)
+    logger.info(
+        "Build context complete source_count=%s citation_count=%s context_length=%s duration_ms=%.2f",
+        len(sources),
+        len(citations),
+        len(context),
+        (time.monotonic() - t0) * 1000,
+    )
+    return context, citations
 
 
 def assemble_context_and_generate(
@@ -190,6 +253,15 @@ def assemble_context_and_generate(
 
     trace_id = str(uuid.uuid4())
     t_start = time.monotonic()
+    logger.info(
+        "RAG pipeline start trace_id=%s org_id=%s user_id=%s kb_count=%s max_chunks=%s query_length=%s",
+        trace_id,
+        org_id,
+        user_id or "anonymous",
+        len(kb_ids),
+        max_chunks,
+        len(query or ""),
+    )
 
     # Start trace
     trace = trace_collector.start_trace(trace_id, org_id, user_id or "anonymous", query, kb_ids)
@@ -201,7 +273,15 @@ def assemble_context_and_generate(
     sources = rerank_sources(query, sources, trace=trace)
 
     # Step 3: Truncate to max_chunks
+    pre_truncate_count = len(sources)
     sources = sources[:max_chunks]
+    logger.info(
+        "RAG source selection complete trace_id=%s retrieved_after_rerank=%s selected=%s max_chunks=%s",
+        trace_id,
+        pre_truncate_count,
+        len(sources),
+        max_chunks,
+    )
 
     # Step 4: Build context
     context, citations = build_context(sources)
@@ -210,6 +290,12 @@ def assemble_context_and_generate(
 
     if not context.strip():
         trace.total_latency_ms = (time.monotonic() - t_start) * 1000
+        logger.info(
+            "RAG pipeline complete trace_id=%s org_id=%s reason=no_context duration_ms=%.2f",
+            trace_id,
+            org_id,
+            trace.total_latency_ms,
+        )
         _write_trace_to_clickhouse(trace)
         yield {
             "delta": "未找到相关的参考资料，无法回答此问题。",
@@ -221,13 +307,23 @@ def assemble_context_and_generate(
 
     # Step 5: Generate answer (streaming)
     t_gen_start = time.monotonic()
+    logger.info(
+        "RAG generation start trace_id=%s org_id=%s context_length=%s source_count=%s model=%s",
+        trace_id,
+        org_id,
+        len(context),
+        len(sources),
+        settings.llm_model,
+    )
     response = generate_stream(query=query, context=context)
 
     accumulated = ""
+    chunk_count = 0
     for chunk in response:
         if hasattr(chunk, "output") and chunk.output:
             delta = chunk.output.choices[0].get("message", {}).get("content", "")
             if delta:
+                chunk_count += 1
                 accumulated += delta
                 yield {
                     "delta": delta,
@@ -239,8 +335,24 @@ def assemble_context_and_generate(
     gen_duration_ms = (time.monotonic() - t_gen_start) * 1000
     if trace:
         trace.add_step("generation", duration_ms=gen_duration_ms)
+    logger.info(
+        "RAG generation complete trace_id=%s chunks=%s answer_length=%s duration_ms=%.2f",
+        trace_id,
+        chunk_count,
+        len(accumulated),
+        gen_duration_ms,
+    )
 
     trace.total_latency_ms = (time.monotonic() - t_start) * 1000
+    logger.info(
+        "RAG pipeline complete trace_id=%s org_id=%s user_id=%s sources=%s answer_length=%s duration_ms=%.2f",
+        trace_id,
+        org_id,
+        user_id or "anonymous",
+        len(sources),
+        len(accumulated),
+        trace.total_latency_ms,
+    )
     _write_trace_to_clickhouse(trace)
 
     yield {
@@ -254,6 +366,7 @@ def assemble_context_and_generate(
 def _write_trace_to_clickhouse(trace):
     """Write trace to ClickHouse asynchronously."""
     if not getattr(settings, "enable_trace_logging", True):
+        logger.debug("Trace logging disabled trace_id=%s", getattr(trace, "trace_id", None))
         return
     try:
         import asyncio
@@ -261,6 +374,7 @@ def _write_trace_to_clickhouse(trace):
         from app.services.clickhouse import clickhouse_client
 
         event = trace.to_clickhouse_event()
+        logger.debug("Queue ClickHouse trace write trace_id=%s", trace.trace_id)
         coro = clickhouse_client.write_trace_event(event)
         try:
             loop = asyncio.get_running_loop()

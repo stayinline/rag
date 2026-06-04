@@ -1,4 +1,5 @@
 """Paper Intelligence API endpoints."""
+import logging
 import os
 import uuid
 
@@ -22,6 +23,7 @@ from app.schemas.paper import (
     SimilarPaperItem,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/papers", tags=["papers"])
 
 
@@ -36,6 +38,16 @@ async def upload_paper(
 ):
     """Upload a SCI PDF paper for parsing and indexing."""
     org_id = str(user["org_id"])
+    logger.info(
+        "Upload paper request org_id=%s user_id=%s kb_id=%s filename=%s doi=%s pmid=%s content_type=%s",
+        org_id,
+        user["user_id"],
+        kb_id,
+        file.filename,
+        doi,
+        pmid,
+        file.content_type,
+    )
 
     # Save uploaded file
     os.makedirs(os.path.join(settings.storage_path, org_id, kb_id), exist_ok=True)
@@ -45,6 +57,15 @@ async def upload_paper(
     with open(storage_path, "wb") as f:
         content = await file.read()
         f.write(content)
+    logger.info(
+        "Upload paper file saved org_id=%s user_id=%s kb_id=%s filename=%s size_bytes=%s storage_path=%s",
+        org_id,
+        user["user_id"],
+        kb_id,
+        file.filename,
+        len(content),
+        storage_path,
+    )
 
     document_id = uuid.uuid4()
     version_id = uuid.uuid4()
@@ -108,12 +129,31 @@ async def upload_paper(
     )
     session.add(job)
     await session.commit()
+    logger.info(
+        "Upload paper records created org_id=%s user_id=%s kb_id=%s paper_id=%s document_id=%s version_id=%s job_id=%s",
+        org_id,
+        user["user_id"],
+        kb_id,
+        paper_id,
+        document_id,
+        version_id,
+        job_id,
+    )
 
     # Kick off Celery task
     from app.workers.celery_app import celery_app
     celery_app.send_task(
         "parse_paper",
         args=[org_id, str(document_id), str(version_id), str(paper_id), storage_path, doi, pmid, kb_id],
+    )
+    logger.info(
+        "Upload paper parse task queued org_id=%s user_id=%s paper_id=%s document_id=%s version_id=%s job_id=%s",
+        org_id,
+        user["user_id"],
+        paper_id,
+        document_id,
+        version_id,
+        job_id,
     )
 
     return PaperUploadResponse(
@@ -134,10 +174,20 @@ async def import_by_doi(
     """Import paper metadata via DOI from CrossRef."""
     from app.services.metadata_enhancer import enhance_via_crossref
 
+    logger.info("Import DOI request org_id=%s user_id=%s doi=%s kb_id=%s", user["org_id"], user["user_id"], data.doi, data.kb_id)
     metadata = enhance_via_crossref(data.doi)
     if not metadata:
+        logger.warning("Import DOI failed org_id=%s user_id=%s doi=%s reason=not_found", user["org_id"], user["user_id"], data.doi)
         raise HTTPException(status_code=404, detail=f"Paper with DOI {data.doi} not found via CrossRef")
 
+    logger.info(
+        "Import DOI succeeded org_id=%s user_id=%s doi=%s has_title=%s author_count=%s",
+        user["org_id"],
+        user["user_id"],
+        data.doi,
+        bool(metadata.title),
+        len(metadata.authors),
+    )
     return {
         "doi": data.doi,
         "title": metadata.title,
@@ -157,10 +207,21 @@ async def import_by_pmid(
     """Import paper metadata via PMID from PubMed."""
     from app.services.metadata_enhancer import enhance_via_pubmed
 
+    logger.info("Import PMID request org_id=%s user_id=%s pmid=%s kb_id=%s", user["org_id"], user["user_id"], data.pmid, data.kb_id)
     metadata = enhance_via_pubmed(data.pmid)
     if not metadata:
+        logger.warning("Import PMID failed org_id=%s user_id=%s pmid=%s reason=not_found", user["org_id"], user["user_id"], data.pmid)
         raise HTTPException(status_code=404, detail=f"Paper with PMID {data.pmid} not found via PubMed")
 
+    logger.info(
+        "Import PMID succeeded org_id=%s user_id=%s pmid=%s has_title=%s author_count=%s mesh_count=%s",
+        user["org_id"],
+        user["user_id"],
+        data.pmid,
+        bool(metadata.title),
+        len(metadata.authors),
+        len(metadata.mesh_terms),
+    )
     return {
         "pmid": data.pmid,
         "title": metadata.title,
@@ -179,10 +240,13 @@ async def get_paper(
     db=Depends(get_db),
 ):
     """Get structured paper details."""
+    logger.info("Get paper request org_id=%s user_id=%s paper_id=%s", user["org_id"], user["user_id"], paper_id)
     session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
+        logger.warning("Get paper failed org_id=%s user_id=%s paper_id=%s reason=not_found", user["org_id"], user["user_id"], paper_id)
         raise HTTPException(status_code=404, detail="Paper not found")
+    logger.info("Get paper succeeded org_id=%s user_id=%s paper_id=%s status=%s", user["org_id"], user["user_id"], paper_id, paper.status)
     return paper
 
 
@@ -193,9 +257,11 @@ async def get_paper_evidence(
     db=Depends(get_db),
 ):
     """Get PICO / evidence summary for a paper."""
+    logger.info("Get paper evidence request org_id=%s user_id=%s paper_id=%s", user["org_id"], user["user_id"], paper_id)
     session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
+        logger.warning("Get paper evidence failed org_id=%s user_id=%s paper_id=%s reason=not_found", user["org_id"], user["user_id"], paper_id)
         raise HTTPException(status_code=404, detail="Paper not found")
 
     return PaperEvidenceResponse(
@@ -224,13 +290,16 @@ async def get_paper_references(
     db=Depends(get_db),
 ):
     """Get references cited by a paper."""
+    logger.info("Get paper references request org_id=%s user_id=%s paper_id=%s", user["org_id"], user["user_id"], paper_id)
     session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
+        logger.warning("Get paper references failed org_id=%s user_id=%s paper_id=%s reason=not_found", user["org_id"], user["user_id"], paper_id)
         raise HTTPException(status_code=404, detail="Paper not found")
 
     from app.schemas.paper import PaperReference
     refs = paper.references or []
+    logger.info("Get paper references succeeded org_id=%s user_id=%s paper_id=%s total=%s", user["org_id"], user["user_id"], paper_id, len(refs))
     return PaperReferencesResponse(
         paper_id=paper.id,
         title=paper.title,
@@ -246,14 +315,17 @@ async def get_similar_papers(
     db=Depends(get_db),
 ):
     """Find similar papers based on MeSH terms and domain tags."""
+    logger.info("Get similar papers request org_id=%s user_id=%s paper_id=%s", user["org_id"], user["user_id"], paper_id)
     session = db
     paper = await session.get(Paper, paper_id)
     if not paper or str(paper.org_id) != str(user["org_id"]):
+        logger.warning("Get similar papers failed org_id=%s user_id=%s paper_id=%s reason=not_found", user["org_id"], user["user_id"], paper_id)
         raise HTTPException(status_code=404, detail="Paper not found")
 
     # Find papers with overlapping MeSH terms in same org
     mesh_terms = paper.mesh_terms or []
     if not mesh_terms:
+        logger.info("Get similar papers complete org_id=%s user_id=%s paper_id=%s reason=no_mesh_terms", user["org_id"], user["user_id"], paper_id)
         return SimilarPapersResponse(paper_id=paper_id, similar_papers=[])
 
     stmt = (
@@ -283,4 +355,12 @@ async def get_similar_papers(
             ))
 
     similar.sort(key=lambda x: x.similarity_score, reverse=True)
+    logger.info(
+        "Get similar papers complete org_id=%s user_id=%s paper_id=%s candidates=%s similar=%s",
+        user["org_id"],
+        user["user_id"],
+        paper_id,
+        len(candidates),
+        len(similar[:5]),
+    )
     return SimilarPapersResponse(paper_id=paper_id, similar_papers=similar[:5])

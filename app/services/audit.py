@@ -23,6 +23,15 @@ async def write_audit_log(
     """Write an audit log entry."""
     import uuid
 
+    logger.info(
+        "Write audit log start org_id=%s user_id=%s action=%s resource_type=%s resource_id=%s status_code=%s",
+        org_id,
+        user_id,
+        action,
+        resource_type,
+        resource_id,
+        status_code,
+    )
     entry = AuditLog(
         id=uuid.uuid4(),
         org_id=org_id,
@@ -38,6 +47,7 @@ async def write_audit_log(
     async with async_session() as session:
         session.add(entry)
         await session.commit()
+    logger.info("Write audit log complete org_id=%s user_id=%s action=%s audit_id=%s", org_id, user_id, action, entry.id)
 
 
 async def query_audit_logs(
@@ -49,6 +59,15 @@ async def query_audit_logs(
     offset: int = 0,
 ) -> tuple[list[AuditLog], int]:
     """Query audit logs with filters."""
+    logger.info(
+        "Query audit logs start org_id=%s action=%s resource_type=%s user_id=%s limit=%s offset=%s",
+        org_id,
+        action,
+        resource_type,
+        user_id,
+        limit,
+        offset,
+    )
     async with async_session() as session:
         stmt = select(AuditLog).where(AuditLog.org_id == org_id)
 
@@ -67,4 +86,5 @@ async def query_audit_logs(
         stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
         result = await session.execute(stmt)
         items = list(result.scalars().all())
+        logger.info("Query audit logs complete org_id=%s total=%s returned=%s", org_id, total, len(items))
         return items, total

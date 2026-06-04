@@ -4,18 +4,72 @@ const api = axios.create({
   baseURL: '/api/v1',
 })
 
+const shouldLogApi =
+  import.meta.env.DEV || String(import.meta.env.VITE_API_LOGGING || '').toLowerCase() === 'true'
+
+const redact = (value) => {
+  if (!value || typeof value !== 'object') return value
+  const sensitive = ['password', 'token', 'access_token', 'authorization', 'secret', 'api_key']
+  const copy = Array.isArray(value) ? [...value] : { ...value }
+  Object.keys(copy).forEach((key) => {
+    if (sensitive.some((part) => key.toLowerCase().includes(part))) {
+      copy[key] = '<redacted>'
+    }
+  })
+  return copy
+}
+
+const logApi = (level, message, details = {}) => {
+  if (!shouldLogApi) return
+  const logger = console[level] || console.log
+  logger(`[api] ${message}`, redact(details))
+}
+
 // Add auth interceptor
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  const requestId =
+    config.headers['X-Request-ID'] ||
+    (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`)
+  config.headers['X-Request-ID'] = requestId
+  config.metadata = { startedAt: performance.now(), requestId }
+  logApi('debug', 'request start', {
+    requestId,
+    method: config.method?.toUpperCase(),
+    url: `${config.baseURL || ''}${config.url || ''}`,
+    params: config.params,
+    data: config.data instanceof FormData ? '<form-data>' : config.data,
+  })
   return config
 })
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const startedAt = res.config.metadata?.startedAt
+    logApi('debug', 'response complete', {
+      requestId: res.headers?.['x-request-id'] || res.config.metadata?.requestId,
+      method: res.config.method?.toUpperCase(),
+      url: `${res.config.baseURL || ''}${res.config.url || ''}`,
+      status: res.status,
+      durationMs: startedAt ? Math.round(performance.now() - startedAt) : undefined,
+    })
+    return res
+  },
   (err) => {
+    const config = err.config || {}
+    const startedAt = config.metadata?.startedAt
+    logApi('error', 'response failed', {
+      requestId: err.response?.headers?.['x-request-id'] || config.metadata?.requestId,
+      method: config.method?.toUpperCase(),
+      url: `${config.baseURL || ''}${config.url || ''}`,
+      status: err.response?.status,
+      durationMs: startedAt ? Math.round(performance.now() - startedAt) : undefined,
+      response: err.response?.data,
+      message: err.message,
+    })
     if (err.response?.status === 401) {
       localStorage.removeItem('token')
       window.location.href = '/login'

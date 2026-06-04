@@ -1,6 +1,9 @@
 from celery import Celery
 
 from app.config import settings
+from app.logging_config import setup_logging
+
+setup_logging()
 
 celery_app = Celery(
     "rag_workers",

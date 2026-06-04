@@ -1,6 +1,7 @@
 """CrossRef / PubMed / MeSH metadata enhancement for papers."""
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -26,10 +27,18 @@ class EnhancedMetadata:
 
 def enhance_via_crossref(doi: str) -> EnhancedMetadata | None:
     """Look up paper metadata via CrossRef API."""
+    t0 = time.monotonic()
+    logger.info("CrossRef lookup start doi=%s", doi)
     try:
         with httpx.Client(timeout=15) as client:
             resp = client.get(f"https://api.crossref.org/works/{doi}")
             if resp.status_code != 200:
+                logger.warning(
+                    "CrossRef lookup returned non-200 doi=%s status_code=%s duration_ms=%.2f",
+                    doi,
+                    resp.status_code,
+                    (time.monotonic() - t0) * 1000,
+                )
                 return None
             data = resp.json()["message"]
             metadata = EnhancedMetadata(source="crossref")
@@ -60,6 +69,14 @@ def enhance_via_crossref(doi: str) -> EnhancedMetadata | None:
                     metadata.publication_date = f"{parts[0]:04d}"
 
             metadata.abstract = data.get("abstract")
+            logger.info(
+                "CrossRef lookup complete doi=%s has_title=%s author_count=%s has_abstract=%s duration_ms=%.2f",
+                doi,
+                bool(metadata.title),
+                len(metadata.authors),
+                bool(metadata.abstract),
+                (time.monotonic() - t0) * 1000,
+            )
             return metadata
 
     except (httpx.RequestError, KeyError, IndexError, json.JSONDecodeError) as e:
@@ -69,6 +86,8 @@ def enhance_via_crossref(doi: str) -> EnhancedMetadata | None:
 
 def enhance_via_pubmed(pmid: str) -> EnhancedMetadata | None:
     """Look up paper metadata via PubMed E-utilities."""
+    t0 = time.monotonic()
+    logger.info("PubMed lookup start pmid=%s", pmid)
     try:
         with httpx.Client(timeout=15) as client:
             # Fetch summary
@@ -77,10 +96,17 @@ def enhance_via_pubmed(pmid: str) -> EnhancedMetadata | None:
                 params={"db": "pubmed", "id": pmid, "retmode": "json"},
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "PubMed summary lookup returned non-200 pmid=%s status_code=%s duration_ms=%.2f",
+                    pmid,
+                    resp.status_code,
+                    (time.monotonic() - t0) * 1000,
+                )
                 return None
             result = resp.json()
             docsum = result.get("result", {}).get(pmid)
             if not docsum:
+                logger.warning("PubMed lookup returned no document pmid=%s duration_ms=%.2f", pmid, (time.monotonic() - t0) * 1000)
                 return None
 
             metadata = EnhancedMetadata(source="pubmed")
@@ -109,6 +135,15 @@ def enhance_via_pubmed(pmid: str) -> EnhancedMetadata | None:
             if mesh_text:
                 metadata.mesh_terms = mesh_text
 
+            logger.info(
+                "PubMed lookup complete pmid=%s has_title=%s author_count=%s mesh_count=%s has_abstract=%s duration_ms=%.2f",
+                pmid,
+                bool(metadata.title),
+                len(metadata.authors),
+                len(metadata.mesh_terms),
+                bool(metadata.abstract),
+                (time.monotonic() - t0) * 1000,
+            )
             return metadata
 
     except (httpx.RequestError, KeyError, json.JSONDecodeError) as e:
@@ -186,15 +221,30 @@ def extract_medical_entities(text: str) -> dict:
         for m in re.finditer(pattern, text_upper):
             targets.add(m.group())
 
-    return {
+    entities = {
         "diseases": sorted(diseases),
         "drugs": sorted(drugs),
         "targets": sorted(targets),
     }
+    logger.info(
+        "Extract medical entities complete text_length=%s disease_count=%s drug_count=%s target_count=%s",
+        len(text or ""),
+        len(entities["diseases"]),
+        len(entities["drugs"]),
+        len(entities["targets"]),
+    )
+    return entities
 
 
 def enhance_paper(result: PaperParseResult, doi: str | None = None, pmid: str | None = None) -> PaperParseResult:
     """Enhance a parsed paper with external metadata from CrossRef, PubMed, MeSH."""
+    logger.info(
+        "Enhance paper start doi=%s pmid=%s title_present=%s section_count=%s",
+        doi,
+        pmid,
+        bool(result.title),
+        len(result.sections),
+    )
     if doi:
         crossref_meta = enhance_via_crossref(doi)
         if crossref_meta:
@@ -229,4 +279,11 @@ def enhance_paper(result: PaperParseResult, doi: str | None = None, pmid: str | 
     full_text = result.abstract + " " + " ".join(s.content for s in result.sections)
     entities = extract_medical_entities(full_text)
 
+    logger.info(
+        "Enhance paper complete doi=%s pmid=%s title_present=%s entity_counts=%s",
+        doi,
+        pmid,
+        bool(result.title),
+        {k: len(v) for k, v in entities.items()},
+    )
     return result, entities

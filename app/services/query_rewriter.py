@@ -54,9 +54,12 @@ class QueryRewriteResult:
 def normalize_drug_names(text: str) -> str:
     """Normalize drug brand names to generic names."""
     result = text
+    replacements = 0
     for brand, generic in DRUG_NAME_MAP.items():
         if brand.lower() in result.lower():
             result = re.sub(re.escape(brand), generic, result, flags=re.IGNORECASE)
+            replacements += 1
+    logger.debug("Normalize drug names complete input_length=%s replacements=%s", len(text or ""), replacements)
     return result
 
 
@@ -77,7 +80,9 @@ def expand_medical_terms(query: str) -> list[str]:
                     if other_syn != synonym:
                         expanded.add(query_lower.replace(synonym.lower(), other_syn.lower()))
 
-    return list(expanded)
+    expanded_list = list(expanded)
+    logger.debug("Expand medical terms complete query_length=%s expanded_count=%s", len(query or ""), len(expanded_list))
+    return expanded_list
 
 
 def detect_entities(query: str) -> dict:
@@ -100,6 +105,7 @@ def detect_entities(query: str) -> dict:
         if drug.lower() in query_lower:
             entities["drugs"].append(f"{drug}->{generic}")
 
+    logger.debug("Detect query entities complete query_length=%s entity_counts=%s", len(query or ""), {k: len(v) for k, v in entities.items()})
     return entities
 
 
@@ -111,6 +117,7 @@ def rewrite_query(query: str, expand_synonyms: bool = True) -> QueryRewriteResul
     2. Normalize drug names
     3. Expand with medical term synonyms (for multi-language support)
     """
+    logger.info("Rewrite query start query_length=%s expand_synonyms=%s", len(query or ""), expand_synonyms)
     # Step 1: Detect entities
     entities = detect_entities(query)
 
@@ -123,11 +130,18 @@ def rewrite_query(query: str, expand_synonyms: bool = True) -> QueryRewriteResul
         synonyms = expand_medical_terms(normalized)
         expanded = [normalized] + synonyms
 
-    return QueryRewriteResult(
+    result = QueryRewriteResult(
         original=query,
         expanded=expanded,
         entities=entities,
     )
+    logger.info(
+        "Rewrite query complete query_length=%s expanded_count=%s entity_counts=%s",
+        len(query or ""),
+        len(result.expanded),
+        {k: len(v) for k, v in result.entities.items()},
+    )
+    return result
 
 
 def rewrite_for_search(query: str) -> str:

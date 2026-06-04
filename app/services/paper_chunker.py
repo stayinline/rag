@@ -1,7 +1,12 @@
 """Section-aware chunking for scientific papers."""
+import logging
+import time
+
 from app.config import settings
 from app.services.chunker import count_tokens
 from app.services.paper_parser import PaperParseResult
+
+logger = logging.getLogger(__name__)
 
 
 # Section importance for retrieval boosting
@@ -33,8 +38,19 @@ def chunk_paper(
     """
     chunk_size = chunk_size or settings.rag_chunk_size
     overlap = overlap or settings.rag_chunk_overlap
+    t0 = time.monotonic()
 
     doc_title = title or result.title
+    logger.info(
+        "Chunk paper start title=%s parser=%s abstract_length=%s section_count=%s reference_count=%s chunk_size=%s overlap=%s",
+        doc_title,
+        result.parser,
+        len(result.abstract or ""),
+        len(result.sections),
+        len(result.references),
+        chunk_size,
+        overlap,
+    )
     chunks = []
 
     # 1. Abstract as a single chunk (high importance)
@@ -85,11 +101,25 @@ def chunk_paper(
     ref_chunks = _chunk_references(result.references)
     chunks.extend(ref_chunks)
 
+    logger.info(
+        "Chunk paper complete title=%s chunk_count=%s reference_chunk_count=%s duration_ms=%.2f",
+        doc_title,
+        len(chunks),
+        len(ref_chunks),
+        (time.monotonic() - t0) * 1000,
+    )
     return chunks
 
 
 def _split_text_with_context(text: str, section_heading: str, chunk_size: int, overlap: int) -> list[str]:
     """Split a large section into chunks with overlap and heading prefix."""
+    logger.debug(
+        "Split paper section start heading=%s text_length=%s chunk_size=%s overlap=%s",
+        section_heading,
+        len(text or ""),
+        chunk_size,
+        overlap,
+    )
     lines = text.split("\n")
     chunks = []
     current_lines = []
@@ -118,11 +148,13 @@ def _split_text_with_context(text: str, section_heading: str, chunk_size: int, o
     if current_lines:
         chunks.append("\n".join(current_lines))
 
+    logger.debug("Split paper section complete heading=%s chunk_count=%s", section_heading, len(chunks))
     return chunks
 
 
 def _chunk_references(references: list[dict]) -> list[dict]:
     """Chunk references - each reference is a chunk."""
+    logger.debug("Chunk references start reference_count=%s", len(references))
     chunks = []
     for i, ref in enumerate(references, 1):
         ref_parts = []
@@ -147,6 +179,7 @@ def _chunk_references(references: list[dict]) -> list[dict]:
             "boost": SECTION_BOOST["references"],
         })
 
+    logger.debug("Chunk references complete reference_count=%s chunk_count=%s", len(references), len(chunks))
     return chunks
 
 

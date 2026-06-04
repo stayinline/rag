@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 
@@ -13,6 +14,7 @@ from app.models.task import IngestionJob
 from app.schemas.document import DocumentListResponse, DocumentResponse
 from app.workers.tasks import chunk_and_embed_from_parse_task, parse_document_task, publish_document_from_chunks_task
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="", tags=["documents"])
 
 
@@ -34,6 +36,14 @@ async def upload_document(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info(
+        "Upload document request org_id=%s user_id=%s kb_id=%s filename=%s content_type=%s",
+        user["org_id"],
+        user["user_id"],
+        kb_id,
+        file.filename,
+        file.content_type,
+    )
     # Verify KB exists
     from app.models.kb import KnowledgeBase
 
@@ -43,6 +53,12 @@ async def upload_document(
     )
     kb_result = await db.execute(kb_stmt)
     if not kb_result.scalar_one_or_none():
+        logger.warning(
+            "Upload document failed org_id=%s user_id=%s kb_id=%s reason=kb_not_found",
+            user["org_id"],
+            user["user_id"],
+            kb_id,
+        )
         raise HTTPException(status_code=404, detail="Knowledge base not found")
 
     # Save file
@@ -54,8 +70,18 @@ async def upload_document(
     file_path = os.path.join(file_dir, filename)
 
     content = await file.read()
+    logger.info(
+        "Upload document file read org_id=%s user_id=%s kb_id=%s filename=%s size_bytes=%s extension=%s",
+        user["org_id"],
+        user["user_id"],
+        kb_id,
+        file.filename,
+        len(content),
+        file_ext,
+    )
     with open(file_path, "wb") as f:
         f.write(content)
+    logger.debug("Upload document file saved path=%s", file_path)
 
     # Create document record
     import hashlib
@@ -102,6 +128,16 @@ async def upload_document(
     db.add(job)
     await db.commit()
     await db.refresh(document)
+    logger.info(
+        "Upload document records created org_id=%s user_id=%s kb_id=%s document_id=%s version_id=%s job_id=%s content_hash=%s",
+        user["org_id"],
+        user["user_id"],
+        kb_id,
+        document.id,
+        version.id,
+        job.id,
+        content_hash,
+    )
 
     # Kick off the full ingestion pipeline: parse -> chunk/embed -> publish.
     ingestion_chain = (
@@ -118,6 +154,15 @@ async def upload_document(
         | publish_document_from_chunks_task.s()
     )
     ingestion_chain.delay()
+    logger.info(
+        "Upload document ingestion chain queued org_id=%s user_id=%s kb_id=%s document_id=%s version_id=%s job_id=%s",
+        user["org_id"],
+        user["user_id"],
+        kb_id,
+        document.id,
+        version.id,
+        job.id,
+    )
 
     return document
 
@@ -128,6 +173,7 @@ async def get_document(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("Get document request org_id=%s user_id=%s document_id=%s", user["org_id"], user["user_id"], document_id)
     stmt = select(Document).where(
         Document.id == document_id,
         Document.org_id == user["org_id"],
@@ -135,7 +181,20 @@ async def get_document(
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
     if not doc:
+        logger.warning(
+            "Get document failed org_id=%s user_id=%s document_id=%s reason=not_found",
+            user["org_id"],
+            user["user_id"],
+            document_id,
+        )
         raise HTTPException(status_code=404, detail="Document not found")
+    logger.info(
+        "Get document succeeded org_id=%s user_id=%s document_id=%s status=%s",
+        user["org_id"],
+        user["user_id"],
+        document_id,
+        doc.status,
+    )
     return doc
 
 
@@ -145,6 +204,7 @@ async def list_documents(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("List documents request org_id=%s user_id=%s kb_id=%s", user["org_id"], user["user_id"], kb_id)
     stmt = select(Document).where(
         Document.kb_id == kb_id,
         Document.org_id == user["org_id"],
@@ -155,6 +215,14 @@ async def list_documents(
 
     result = await db.execute(stmt.order_by(Document.created_at.desc()).limit(50))
     items = result.scalars().all()
+    logger.info(
+        "List documents complete org_id=%s user_id=%s kb_id=%s total=%s returned=%s",
+        user["org_id"],
+        user["user_id"],
+        kb_id,
+        total,
+        len(items),
+    )
     return {"items": items, "total": total}
 
 
@@ -164,6 +232,7 @@ async def delete_document(
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("Delete document request org_id=%s user_id=%s document_id=%s", user["org_id"], user["user_id"], document_id)
     from datetime import datetime, timezone
     from sqlalchemy import update as sql_update
 
@@ -174,6 +243,12 @@ async def delete_document(
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
     if not doc:
+        logger.warning(
+            "Delete document failed org_id=%s user_id=%s document_id=%s reason=not_found",
+            user["org_id"],
+            user["user_id"],
+            document_id,
+        )
         raise HTTPException(status_code=404, detail="Document not found")
 
     await db.execute(
@@ -182,3 +257,4 @@ async def delete_document(
         .values(deleted_at=datetime.now(timezone.utc), status="deleted")
     )
     await db.commit()
+    logger.info("Delete document succeeded org_id=%s user_id=%s document_id=%s", user["org_id"], user["user_id"], document_id)
