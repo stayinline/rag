@@ -87,8 +87,6 @@ Here we describe the methods used in this study about retrieval.
         mock_w_client = MagicMock()
         mock_collection = MagicMock()
         mock_w_client.collections.get = MagicMock(return_value=mock_collection)
-        mock_w_client.connect = MagicMock()
-        mock_w_client.close = MagicMock()
         mock_client.return_value = mock_w_client
 
         # Do NOT pass None as first arg - Celery auto-injects self
@@ -163,6 +161,66 @@ def test_upsert_weaviate_object_updates_duplicate_insert():
     collection.data.update.assert_called_once_with(uuid="chunk-id", properties=properties, vector=vector)
 
 
+def test_batch_publish_weaviate_chunks_preserves_existing_properties_and_vector():
+    from app.workers.tasks import _batch_publish_weaviate_chunks
+
+    collection = MagicMock()
+    obj_1 = MagicMock()
+    obj_1.uuid = "chunk-1"
+    obj_1.properties = {"status": "draft", "content": "A"}
+    obj_1.vector = {"default": [0.1, 0.2]}
+    obj_2 = MagicMock()
+    obj_2.uuid = "chunk-2"
+    obj_2.properties = {"status": "draft", "content": "B"}
+    obj_2.vector = {"default": [0.3, 0.4]}
+    collection.query.fetch_objects_by_ids.return_value = MagicMock(objects=[obj_1, obj_2])
+
+    batch = MagicMock()
+    collection.batch.fixed_size.return_value.__enter__.return_value = batch
+    collection.batch.fixed_size.return_value.__exit__.return_value = False
+    collection.batch.failed_objects = []
+
+    updated_count = _batch_publish_weaviate_chunks(collection, ["chunk-1", "chunk-2"])
+
+    assert updated_count == 2
+    collection.query.fetch_objects_by_ids.assert_called_once_with(
+        ["chunk-1", "chunk-2"],
+        include_vector=True,
+        return_properties=True,
+    )
+    collection.batch.fixed_size.assert_called_once_with(batch_size=2, concurrent_requests=2)
+    batch.add_object.assert_any_call(
+        uuid="chunk-1",
+        properties={"status": "ready", "content": "A"},
+        vector={"default": [0.1, 0.2]},
+    )
+    batch.add_object.assert_any_call(
+        uuid="chunk-2",
+        properties={"status": "ready", "content": "B"},
+        vector={"default": [0.3, 0.4]},
+    )
+    collection.data.update.assert_not_called()
+
+
+def test_batch_publish_weaviate_chunks_fails_when_chunk_missing():
+    from app.workers.tasks import _batch_publish_weaviate_chunks
+
+    collection = MagicMock()
+    obj_1 = MagicMock()
+    obj_1.uuid = "chunk-1"
+    obj_1.properties = {"status": "draft", "content": "A"}
+    obj_1.vector = {"default": [0.1, 0.2]}
+    collection.query.fetch_objects_by_ids.return_value = MagicMock(objects=[obj_1])
+
+    try:
+        _batch_publish_weaviate_chunks(collection, ["chunk-1", "chunk-2"])
+        assert False, "Should fail when Weaviate does not return every requested chunk"
+    except RuntimeError as exc:
+        assert "missing 1 chunks" in str(exc)
+
+    collection.batch.fixed_size.assert_not_called()
+
+
 def test_chunk_and_embed_task_missing_file():
     from app.workers.tasks import chunk_and_embed_task
     from celery.exceptions import Retry
@@ -200,8 +258,19 @@ def test_publish_document_task():
         mock_w_client = MagicMock()
         mock_collection = MagicMock()
         mock_w_client.collections.get = MagicMock(return_value=mock_collection)
-        mock_w_client.connect = MagicMock()
-        mock_w_client.close = MagicMock()
+        obj_1 = MagicMock()
+        obj_1.uuid = "chunk-1"
+        obj_1.properties = {"status": "draft", "content": "A"}
+        obj_1.vector = {"default": [0.1, 0.2]}
+        obj_2 = MagicMock()
+        obj_2.uuid = "chunk-2"
+        obj_2.properties = {"status": "draft", "content": "B"}
+        obj_2.vector = {"default": [0.3, 0.4]}
+        mock_collection.query.fetch_objects_by_ids.return_value = MagicMock(objects=[obj_1, obj_2])
+        mock_batch = MagicMock()
+        mock_collection.batch.fixed_size.return_value.__enter__.return_value = mock_batch
+        mock_collection.batch.fixed_size.return_value.__exit__.return_value = False
+        mock_collection.batch.failed_objects = []
         mock_client.return_value = mock_w_client
 
         result = publish_document_task(
@@ -216,6 +285,14 @@ def test_publish_document_task():
     assert result["document_id"] == "test-doc"
     assert result["status"] == "ready"
     assert result["chunk_count"] == 2
+    mock_collection.query.fetch_objects_by_ids.assert_called_once_with(
+        chunk_ids,
+        include_vector=True,
+        return_properties=True,
+    )
+    assert mock_batch.add_object.call_count == 2
+    mock_collection.data.update.assert_not_called()
+    mock_w_client.close.assert_not_called()
 
 
 def test_chunk_and_embed_from_parse_task_continues_pipeline():
@@ -302,8 +379,6 @@ def test_parse_paper_task_writes_kb_id_to_weaviate():
     mock_w_client = MagicMock()
     mock_collection = MagicMock()
     mock_w_client.collections.get.return_value = mock_collection
-    mock_w_client.connect = MagicMock()
-    mock_w_client.close = MagicMock()
 
     kb_id = "kb-123"
     with patch("app.workers.tasks.parse_paper_local", return_value=parse_result), \

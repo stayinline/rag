@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from app.services.weaviate_client import (
     COLLECTION_NAME,
     COLLECTION_PROPERTIES,
+    close_client,
     ensure_collection,
     get_client,
 )
@@ -45,6 +46,7 @@ def test_ensure_collection_skips_existing():
 
 
 def test_get_client(mock_settings):
+    close_client()
     with patch("app.services.weaviate_client.ConnectionParams") as mock_params, \
          patch("app.services.weaviate_client.weaviate.WeaviateClient") as mock_client_cls, \
          patch("app.services.weaviate_client.settings") as mock_settings:
@@ -53,9 +55,11 @@ def test_get_client(mock_settings):
         connection_params = MagicMock()
         mock_params.from_url.return_value = connection_params
         mock_client = MagicMock()
+        mock_client.is_connected.side_effect = [False, True]
         mock_client_cls.return_value = mock_client
 
         client = get_client()
+        same_client = get_client()
 
         mock_params.from_url.assert_called_once_with(
             "http://configured-weaviate:18080",
@@ -63,3 +67,20 @@ def test_get_client(mock_settings):
         )
         mock_client_cls.assert_called_once_with(connection_params=connection_params)
         assert client is mock_client
+        assert same_client is mock_client
+        mock_client.connect.assert_called_once()
+    close_client()
+
+
+def test_close_client_resets_singleton(mock_settings):
+    close_client()
+    with patch("app.services.weaviate_client.weaviate.WeaviateClient") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client.is_connected.return_value = True
+        mock_client_cls.return_value = mock_client
+
+        client = get_client()
+        close_client()
+
+    assert client is mock_client
+    mock_client.close.assert_called_once()

@@ -102,6 +102,44 @@ def _upsert_weaviate_object(
         return "updated"
 
 
+def _batch_publish_weaviate_chunks(collection: Any, chunk_ids: list[str], *, batch_size: int = 100) -> int:
+    updated_count = 0
+
+    for offset in range(0, len(chunk_ids), batch_size):
+        batch_ids = chunk_ids[offset:offset + batch_size]
+        response = collection.query.fetch_objects_by_ids(
+            batch_ids,
+            include_vector=True,
+            return_properties=True,
+        )
+        objects = list(getattr(response, "objects", []) or [])
+        if not objects:
+            raise RuntimeError(f"Weaviate batch publish found no chunks for batch starting at offset {offset}")
+
+        objects_by_id = {str(obj.uuid): obj for obj in objects}
+        missing_ids = [cid for cid in batch_ids if cid not in objects_by_id]
+        if missing_ids:
+            raise RuntimeError(f"Weaviate batch publish missing {len(missing_ids)} chunks")
+
+        with collection.batch.fixed_size(batch_size=len(batch_ids), concurrent_requests=2) as batch:
+            for cid in batch_ids:
+                obj = objects_by_id[cid]
+                properties = dict(getattr(obj, "properties", {}) or {})
+                properties["status"] = "ready"
+                batch.add_object(
+                    uuid=str(obj.uuid),
+                    properties=properties,
+                    vector=getattr(obj, "vector", None) or None,
+                )
+                updated_count += 1
+
+        failed_objects = list(getattr(collection.batch, "failed_objects", []) or [])
+        if failed_objects:
+            raise RuntimeError(f"Weaviate batch publish failed for {len(failed_objects)} chunks")
+
+    return updated_count
+
+
 def _make_idEMPOTENCY_KEY(org_id: str, document_id: str, version_id: str, job_type: str) -> str:
     return f"{org_id}:{document_id}:{version_id}:{job_type}"
 
@@ -358,70 +396,65 @@ def chunk_and_embed_task(
 
         # Write to Weaviate
         client = get_client()
-        logger.info("Task chunk_and_embed connecting Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
-        client.connect()
-        try:
-            collection = client.collections.get(COLLECTION_NAME)
-            chunk_ids = []
-            inserted_count = 0
-            updated_count = 0
+        logger.info("Task chunk_and_embed using Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
+        collection = client.collections.get(COLLECTION_NAME)
+        chunk_ids = []
+        inserted_count = 0
+        updated_count = 0
 
-            for idx, (chunk_data, vector) in enumerate(zip(chunks, all_vectors)):
-                weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:{idx}"))
-                properties = {
-                    "org_id": org_id,
-                    "kb_id": kb_id,
-                    "document_id": document_id,
-                    "document_version_id": version_id,
-                    "chunk_id": weaviate_uuid,
-                    "security_level": "internal",
-                    "status": "draft",
-                    "content": chunk_data["content"],
-                    "title": title,
-                    "section_path": chunk_data["section_path"],
-                    "page_start": None,
-                    "page_end": None,
-                    "document_type": "general",
-                    "domain_tags": [],
-                    "entities": [],
-                    "embedding_model": settings.embedding_model,
-                    "created_at": datetime.now(timezone.utc),
-                    "section_type": None,
-                }
-                write_action = _upsert_weaviate_object(
-                    collection,
-                    object_id=weaviate_uuid,
-                    properties=properties,
-                    vector=vector,
-                    task_id=_task_request_id(self),
-                    owner_type="document_id",
-                    owner_id=document_id,
-                )
-                if write_action == "inserted":
-                    inserted_count += 1
-                else:
-                    updated_count += 1
-                chunk_ids.append(weaviate_uuid)
-
-            logger.info(
-                "Task chunk_and_embed Weaviate upsert complete task_id=%s document_id=%s chunk_count=%s inserted=%s updated=%s",
-                _task_request_id(self),
-                document_id,
-                len(chunk_ids),
-                inserted_count,
-                updated_count,
-            )
-            return {
+        for idx, (chunk_data, vector) in enumerate(zip(chunks, all_vectors)):
+            weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:{idx}"))
+            properties = {
                 "org_id": org_id,
-                "document_id": document_id,
-                "version_id": version_id,
                 "kb_id": kb_id,
-                "chunk_count": len(chunks),
-                "chunk_ids": chunk_ids,
+                "document_id": document_id,
+                "document_version_id": version_id,
+                "chunk_id": weaviate_uuid,
+                "security_level": "internal",
+                "status": "draft",
+                "content": chunk_data["content"],
+                "title": title,
+                "section_path": chunk_data["section_path"],
+                "page_start": None,
+                "page_end": None,
+                "document_type": "general",
+                "domain_tags": [],
+                "entities": [],
+                "embedding_model": settings.embedding_model,
+                "created_at": datetime.now(timezone.utc),
+                "section_type": None,
             }
-        finally:
-            client.close()
-            logger.debug("Task chunk_and_embed Weaviate client closed task_id=%s document_id=%s", _task_request_id(self), document_id)
+            write_action = _upsert_weaviate_object(
+                collection,
+                object_id=weaviate_uuid,
+                properties=properties,
+                vector=vector,
+                task_id=_task_request_id(self),
+                owner_type="document_id",
+                owner_id=document_id,
+            )
+            if write_action == "inserted":
+                inserted_count += 1
+            else:
+                updated_count += 1
+            chunk_ids.append(weaviate_uuid)
+
+        logger.info(
+            "Task chunk_and_embed Weaviate upsert complete task_id=%s document_id=%s chunk_count=%s inserted=%s updated=%s",
+            _task_request_id(self),
+            document_id,
+            len(chunk_ids),
+            inserted_count,
+            updated_count,
+        )
+        return {
+            "org_id": org_id,
+            "document_id": document_id,
+            "version_id": version_id,
+            "kb_id": kb_id,
+            "chunk_count": len(chunks),
+            "chunk_ids": chunk_ids,
+        }
 
     except Exception as e:
         _set_ingestion_job_status(
@@ -536,35 +569,16 @@ def publish_document_task(
 
         # Update Weaviate chunks status to ready
         client = get_client()
-        logger.info("Task publish_document connecting Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
-        client.connect()
-        try:
-            collection = client.collections.get(COLLECTION_NAME)
-            updated_count = 0
-            for cid in chunk_ids:
-                try:
-                    collection.data.update(
-                        uuid=cid,
-                        properties={"status": "ready"},
-                    )
-                    updated_count += 1
-                except Exception:
-                    logger.warning(
-                        "Task publish_document Weaviate chunk update failed task_id=%s document_id=%s chunk_id=%s",
-                        _task_request_id(self),
-                        document_id,
-                        cid,
-                        exc_info=True,
-                    )
-            logger.info(
-                "Task publish_document Weaviate update complete task_id=%s document_id=%s updated_chunks=%s requested_chunks=%s",
-                _task_request_id(self),
-                document_id,
-                updated_count,
-                len(chunk_ids),
-            )
-        finally:
-            client.close()
+        logger.info("Task publish_document using Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
+        collection = client.collections.get(COLLECTION_NAME)
+        updated_count = _batch_publish_weaviate_chunks(collection, chunk_ids)
+        logger.info(
+            "Task publish_document Weaviate batch update complete task_id=%s document_id=%s updated_chunks=%s requested_chunks=%s",
+            _task_request_id(self),
+            document_id,
+            updated_count,
+            len(chunk_ids),
+        )
 
         _set_ingestion_job_status(document_id, version_id, "completed")
         logger.info("Task publish_document complete task_id=%s document_id=%s status=ready", _task_request_id(self), document_id)
@@ -783,61 +797,56 @@ def parse_paper_task(
 
         # Step 6: Write to Weaviate
         client = get_client()
-        logger.info("Task parse_paper connecting Weaviate task_id=%s paper_id=%s", self.request.id, paper_id)
-        client.connect()
-        try:
-            collection = client.collections.get(COLLECTION_NAME)
-            chunk_ids = []
-            inserted_count = 0
-            updated_count = 0
+        logger.info("Task parse_paper using Weaviate task_id=%s paper_id=%s", self.request.id, paper_id)
+        collection = client.collections.get(COLLECTION_NAME)
+        chunk_ids = []
+        inserted_count = 0
+        updated_count = 0
 
-            for idx, (chunk_data, vector) in enumerate(zip(paper_chunks, all_vectors)):
-                weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:paper:{idx}"))
-                properties = {
-                    "org_id": org_id,
-                    "kb_id": resolved_kb_id or "",
-                    "document_id": document_id,
-                    "document_version_id": version_id,
-                    "chunk_id": weaviate_uuid,
-                    "security_level": "internal",
-                    "status": "ready",  # Papers go directly to ready
-                    "content": chunk_data["content"],
-                    "title": title,
-                    "section_path": chunk_data.get("section_path", ""),
-                    "page_start": chunk_data.get("page_start"),
-                    "page_end": chunk_data.get("page_end"),
-                    "document_type": "paper",
-                    "domain_tags": entities.get("diseases", [])[:5] + entities.get("targets", [])[:5],
-                    "entities": entities.get("drugs", [])[:10] + entities.get("targets", [])[:10],
-                    "embedding_model": settings.embedding_model,
-                    "created_at": datetime.now(timezone.utc),
-                    "section_type": chunk_data.get("section_type", "other"),
-                }
-                write_action = _upsert_weaviate_object(
-                    collection,
-                    object_id=weaviate_uuid,
-                    properties=properties,
-                    vector=vector,
-                    task_id=self.request.id,
-                    owner_type="paper_id",
-                    owner_id=paper_id,
-                )
-                if write_action == "inserted":
-                    inserted_count += 1
-                else:
-                    updated_count += 1
-                chunk_ids.append(weaviate_uuid)
-            logger.info(
-                "Task parse_paper Weaviate upsert complete task_id=%s paper_id=%s chunk_count=%s inserted=%s updated=%s",
-                self.request.id,
-                paper_id,
-                len(chunk_ids),
-                inserted_count,
-                updated_count,
+        for idx, (chunk_data, vector) in enumerate(zip(paper_chunks, all_vectors)):
+            weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:paper:{idx}"))
+            properties = {
+                "org_id": org_id,
+                "kb_id": resolved_kb_id or "",
+                "document_id": document_id,
+                "document_version_id": version_id,
+                "chunk_id": weaviate_uuid,
+                "security_level": "internal",
+                "status": "ready",  # Papers go directly to ready
+                "content": chunk_data["content"],
+                "title": title,
+                "section_path": chunk_data.get("section_path", ""),
+                "page_start": chunk_data.get("page_start"),
+                "page_end": chunk_data.get("page_end"),
+                "document_type": "paper",
+                "domain_tags": entities.get("diseases", [])[:5] + entities.get("targets", [])[:5],
+                "entities": entities.get("drugs", [])[:10] + entities.get("targets", [])[:10],
+                "embedding_model": settings.embedding_model,
+                "created_at": datetime.now(timezone.utc),
+                "section_type": chunk_data.get("section_type", "other"),
+            }
+            write_action = _upsert_weaviate_object(
+                collection,
+                object_id=weaviate_uuid,
+                properties=properties,
+                vector=vector,
+                task_id=self.request.id,
+                owner_type="paper_id",
+                owner_id=paper_id,
             )
-        finally:
-            client.close()
-            logger.debug("Task parse_paper Weaviate client closed task_id=%s paper_id=%s", self.request.id, paper_id)
+            if write_action == "inserted":
+                inserted_count += 1
+            else:
+                updated_count += 1
+            chunk_ids.append(weaviate_uuid)
+        logger.info(
+            "Task parse_paper Weaviate upsert complete task_id=%s paper_id=%s chunk_count=%s inserted=%s updated=%s",
+            self.request.id,
+            paper_id,
+            len(chunk_ids),
+            inserted_count,
+            updated_count,
+        )
 
         # Step 7: Update document status
         async def _finalize():

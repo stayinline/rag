@@ -17,26 +17,23 @@ _client_lock = threading.Lock()
 def get_client() -> weaviate.WeaviateClient:
     global _client
 
-    if _client is None:
-        with _client_lock:
-            if _client is None:
-                logger.info(
-                    "Create shared Weaviate client url=%s grpc_port=%s",
+    with _client_lock:
+        if _client is None:
+            logger.info(
+                "Create shared Weaviate client url=%s grpc_port=%s",
+                settings.weaviate_url,
+                settings.weaviate_grpc_port,
+            )
+            _client = weaviate.WeaviateClient(
+                connection_params=ConnectionParams.from_url(
                     settings.weaviate_url,
-                    settings.weaviate_grpc_port,
-                )
-                _client = weaviate.WeaviateClient(
-                    connection_params=ConnectionParams.from_url(
-                        settings.weaviate_url,
-                        grpc_port=settings.weaviate_grpc_port,
-                    ),
-                )
+                    grpc_port=settings.weaviate_grpc_port,
+                ),
+            )
 
-    if not _client.is_connected():
-        with _client_lock:
-            if not _client.is_connected():
-                logger.debug("Connect shared Weaviate client")
-                _client.connect()
+        if not _client.is_connected():
+            logger.debug("Connect shared Weaviate client")
+            _client.connect()
 
     return _client
 

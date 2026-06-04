@@ -114,64 +114,58 @@ def hybrid_search(
             trace.add_step("rewrite", details={"rewrite_count": len(queries)})
 
     client = get_client()
-    logger.debug("Hybrid search connecting to Weaviate collection=%s", COLLECTION_NAME)
-    client.connect()
-    try:
-        collection = client.collections.get(COLLECTION_NAME)
-        where = _build_where_filter(org_id, kb_ids)
+    logger.debug("Hybrid search using Weaviate collection=%s", COLLECTION_NAME)
+    collection = client.collections.get(COLLECTION_NAME)
+    where = _build_where_filter(org_id, kb_ids)
 
-        all_results = []
-        seen_ids = set()
+    all_results = []
+    seen_ids = set()
 
-        for q in queries:
-            query_start = time.monotonic()
-            query_vector = embed_text(q)
-            logger.debug(
-                "Hybrid search embedding ready org_id=%s query_length=%s vector_dims=%s",
-                org_id,
-                len(q or ""),
-                len(query_vector),
-            )
-            response = collection.query.hybrid(
-                query=q,
-                vector=query_vector,
-                filters=where,
-                limit=top_k,
-                alpha=0.5,
-                return_metadata=MetadataQuery(score=True),
-            )
-            logger.info(
-                "Hybrid search Weaviate query complete org_id=%s query_length=%s returned=%s duration_ms=%.2f",
-                org_id,
-                len(q or ""),
-                len(response.objects),
-                (time.monotonic() - query_start) * 1000,
-            )
-            for obj in response.objects:
-                obj_uuid = str(obj.uuid)
-                if obj_uuid not in seen_ids:
-                    seen_ids.add(obj_uuid)
-                    score = _metadata_score(obj.metadata)
-                    all_results.append(_weaviate_to_source(obj, score))
-
-        results = all_results[:top_k]
-        duration_ms = (time.monotonic() - t0) * 1000
-        if trace:
-            trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
-        logger.info(
-            "Hybrid search complete org_id=%s kb_count=%s expanded_count=%s unique_results=%s returned=%s duration_ms=%.2f",
+    for q in queries:
+        query_start = time.monotonic()
+        query_vector = embed_text(q)
+        logger.debug(
+            "Hybrid search embedding ready org_id=%s query_length=%s vector_dims=%s",
             org_id,
-            len(kb_ids),
-            len(queries),
-            len(all_results),
-            len(results),
-            duration_ms,
+            len(q or ""),
+            len(query_vector),
         )
-        return results
+        response = collection.query.hybrid(
+            query=q,
+            vector=query_vector,
+            filters=where,
+            limit=top_k,
+            alpha=0.5,
+            return_metadata=MetadataQuery(score=True),
+        )
+        logger.info(
+            "Hybrid search Weaviate query complete org_id=%s query_length=%s returned=%s duration_ms=%.2f",
+            org_id,
+            len(q or ""),
+            len(response.objects),
+            (time.monotonic() - query_start) * 1000,
+        )
+        for obj in response.objects:
+            obj_uuid = str(obj.uuid)
+            if obj_uuid not in seen_ids:
+                seen_ids.add(obj_uuid)
+                score = _metadata_score(obj.metadata)
+                all_results.append(_weaviate_to_source(obj, score))
 
-    finally:
-        client.close()
-        logger.debug("Hybrid search Weaviate client closed org_id=%s", org_id)
+    results = all_results[:top_k]
+    duration_ms = (time.monotonic() - t0) * 1000
+    if trace:
+        trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
+    logger.info(
+        "Hybrid search complete org_id=%s kb_count=%s expanded_count=%s unique_results=%s returned=%s duration_ms=%.2f",
+        org_id,
+        len(kb_ids),
+        len(queries),
+        len(all_results),
+        len(results),
+        duration_ms,
+    )
+    return results
 
 
 def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = None, trace: object = None) -> list[RAGSource]:
