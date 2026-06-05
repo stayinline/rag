@@ -1,11 +1,37 @@
-import React, { useState } from 'react'
-import { uploadPaper, importPaperByDoi, importPaperByPmid, getPaper } from '../api'
+import React, { useEffect, useState } from 'react'
+import { listKbs, uploadPaper, importPaperByDoi, importPaperByPmid } from '../api'
+
+const getErrorMessage = (err) => {
+  const detail = err?.response?.data?.detail
+
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object') return String(item)
+
+      const location = Array.isArray(item.loc) ? item.loc.join('.') : item.loc
+      const message = item.msg || item.message || item.type || JSON.stringify(item)
+      return location ? `${location}: ${message}` : message
+    }).filter(Boolean)
+
+    return messages.join('；') || err?.message || '请求失败'
+  }
+
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object') return detail.message || detail.msg || JSON.stringify(detail)
+
+  return err?.message || '请求失败'
+}
 
 export default function PaperHub() {
   const [activeTab, setActiveTab] = useState('upload') // upload | doi | pmid
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [kbs, setKbs] = useState([])
+  const [kbsLoading, setKbsLoading] = useState(false)
+  const [kbsError, setKbsError] = useState('')
+  const [selectedKbId, setSelectedKbId] = useState('')
 
   // Upload state
   const [uploadFile, setUploadFile] = useState(null)
@@ -14,18 +40,51 @@ export default function PaperHub() {
   const [doiInput, setDoiInput] = useState('')
   const [pmidInput, setPmidInput] = useState('')
 
+  useEffect(() => {
+    fetchKbs()
+  }, [])
+
+  const fetchKbs = async () => {
+    setKbsLoading(true)
+    setKbsError('')
+    try {
+      const data = await listKbs()
+      const items = data.items || data || []
+      setKbs(items)
+      setSelectedKbId((current) => {
+        if (current && items.some((kb) => kb.id === current)) return current
+        return items[0]?.id || ''
+      })
+    } catch (err) {
+      setKbs([])
+      setSelectedKbId('')
+      setKbsError(getErrorMessage(err))
+    } finally {
+      setKbsLoading(false)
+    }
+  }
+
+  const requireSelectedKb = () => {
+    if (selectedKbId) return true
+    setError('请先选择知识库')
+    return false
+  }
+
   const handleUpload = async () => {
     if (!uploadFile) return
+    if (!requireSelectedKb()) return
     setLoading(true)
     setError('')
     setResult(null)
     const formData = new FormData()
     formData.append('file', uploadFile)
+    formData.append('kb_id', selectedKbId)
     try {
       const data = await uploadPaper(formData)
       setResult(data)
+      setUploadFile(null)
     } catch (err) {
-      setError(err.response?.data?.detail || err.message)
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -33,14 +92,15 @@ export default function PaperHub() {
 
   const handleDoiImport = async () => {
     if (!doiInput.trim()) return
+    if (!requireSelectedKb()) return
     setLoading(true)
     setError('')
     setResult(null)
     try {
-      const data = await importPaperByDoi(doiInput.trim())
+      const data = await importPaperByDoi(doiInput.trim(), selectedKbId)
       setResult(data)
     } catch (err) {
-      setError(err.response?.data?.detail || err.message)
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -48,14 +108,15 @@ export default function PaperHub() {
 
   const handlePmidImport = async () => {
     if (!pmidInput.trim()) return
+    if (!requireSelectedKb()) return
     setLoading(true)
     setError('')
     setResult(null)
     try {
-      const data = await importPaperByPmid(pmidInput.trim())
+      const data = await importPaperByPmid(pmidInput.trim(), selectedKbId)
       setResult(data)
     } catch (err) {
-      setError(err.response?.data?.detail || err.message)
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -64,6 +125,44 @@ export default function PaperHub() {
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <h2 className="text-xl font-semibold text-gray-800 mb-6">论文中心</h2>
+
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <label className="text-sm font-medium text-gray-700" htmlFor="paper-kb-select">目标知识库</label>
+        <select
+          id="paper-kb-select"
+          value={selectedKbId}
+          onChange={(e) => setSelectedKbId(e.target.value)}
+          disabled={kbsLoading || kbs.length === 0}
+          className="min-w-64 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
+        >
+          {kbs.length === 0 ? (
+            <option value="">{kbsLoading ? '加载中...' : '暂无知识库'}</option>
+          ) : (
+            kbs.map((kb) => (
+              <option key={kb.id} value={kb.id}>{kb.name}</option>
+            ))
+          )}
+        </select>
+        <button
+          onClick={fetchKbs}
+          disabled={kbsLoading}
+          className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm hover:bg-gray-200 disabled:opacity-50"
+        >
+          刷新
+        </button>
+      </div>
+
+      {kbsError && (
+        <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
+          知识库加载失败：{kbsError}
+        </div>
+      )}
+
+      {!kbsLoading && !kbsError && kbs.length === 0 && (
+        <div className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-700">
+          请先在知识库管理中创建知识库
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-6 w-fit">
@@ -101,7 +200,7 @@ export default function PaperHub() {
               />
               <button
                 onClick={handleUpload}
-                disabled={!uploadFile || loading}
+                disabled={!uploadFile || !selectedKbId || loading}
                 className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
               >
                 {loading ? '解析中...' : '上传并解析'}
@@ -124,7 +223,7 @@ export default function PaperHub() {
               />
               <button
                 onClick={handleDoiImport}
-                disabled={!doiInput.trim() || loading}
+                disabled={!doiInput.trim() || !selectedKbId || loading}
                 className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
               >
                 {loading ? '导入中...' : '导入'}
@@ -147,7 +246,7 @@ export default function PaperHub() {
               />
               <button
                 onClick={handlePmidImport}
-                disabled={!pmidInput.trim() || loading}
+                disabled={!pmidInput.trim() || !selectedKbId || loading}
                 className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
               >
                 {loading ? '导入中...' : '导入'}
@@ -169,6 +268,8 @@ export default function PaperHub() {
             <div className="text-xs text-gray-600 space-y-1">
               {result.title && <div><span className="font-medium">标题：</span>{result.title}</div>}
               {result.doi && <div><span className="font-medium">DOI：</span>{result.doi}</div>}
+              {result.paper_id && <div><span className="font-medium">论文 ID：</span>{result.paper_id}</div>}
+              {result.document_id && <div><span className="font-medium">文档 ID：</span>{result.document_id}</div>}
               {result.id && <div><span className="font-medium">ID：</span>{result.id}</div>}
               <pre className="mt-2 text-xs text-gray-500 overflow-auto max-h-40">
                 {JSON.stringify(result, null, 2)}

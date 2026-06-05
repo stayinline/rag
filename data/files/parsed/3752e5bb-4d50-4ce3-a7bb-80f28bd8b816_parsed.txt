@@ -1,0 +1,1425 @@
+The free-streaming length of dark matter from JWST observations of 28 strong
+gravitational lenses
+D. Gilman⋆
+,1, ∗A. M. Nierenberg⋆
+,2, † T. Treu ,3 K. N. Abazajian ,4 T. Anguita ,5
+V. N. Bennert ,6 A. J. Benson ,7 S. Birrer ,8 S. G. Djorgovski ,9 X. Du ,3 C. Gannon ,2
+S. F. Hoenig ,10 R. E. Keeley ,2 A. Kusenko ,3, 11 H. R. Larsson ,2 M. Malkan ,3
+T. Morishita ,12 V. Motta ,13 L. A. Moustakas ,14 P. Mozumdar ,3, 15 H. Paugnat ,3
+W. Sheu ,3 D. Sluse ,16 D. Stern ,14 M. Stiavelli ,17 D. Williams ,3 and K. C. Wong
+18
+1Department of Astronomy & Astrophysics, University of Chicago, Chicago, IL 60637, USA
+2University of California, Merced, 5200 N Lake Road, Merced, CA 95341, USA
+3Department of Physics and Astronomy, University of California, Los Angeles, CA, 90095, USA
+4Department of Physics and Astronomy, University of California, Irvine, CA 92697-4575, USA
+5Instituto de Astrofisica, Departamento de Fisica y Astronomia, Universidad Andres Bello, Chile
+6Physics Department, California Polytechnic State University, San Luis Obispo, CA 93407, USA
+7Carnegie Institution for Science, Pasadena CA 91101, USA
+8Department of Physics and Astronomy, Stony Brook University, Stony Brook, NY 11794, USA
+9California Institute of Technology, Pasadena CA 91125, USA
+10School of Physics and Astronomy, University of Southampton, Southampton SO17 1BJ, United Kingdom
+11Kavli Institute for the Physics and Mathematics of the Universe (WPI),
+UTIAS, The University of Tokyo, Kashiwa, Chiba 277-8583, Japan
+12IPAC, California Institute of Technology, MC 314-6,
+1200 E. California Boulevard, Pasadena, CA 91125, USA
+13Instituto de F´ısica y Astronom´ıa, Universidad de Valpara´ıso, Avda. Gran Breta˜na 1111, Valpara´ıso, Chile
+14Jet Propulsion Laboratory, California Institute of Technology, 4800 Oak Grove Dr, Pasadena, CA 91109
+15Department of Physics and Astronomy, University of California, Davis, 1 Shields Ave., Davis, CA 95616, USA
+16STAR Institute, University of Li`ege, Quartier Agora, All´ee du six Aoˆut 19c, 4000 Li`ege, Belgium
+17Space Telescope Science Institute, 3700 San Martin Drive, Baltimore, MD 21218, USA
+18Research Center for the Early Universe, Graduate School of Science,
+The University of Tokyo, 7-3-1 Hongo, Bunkyo-ku, Tokyo 113-0033, Japan
+(Dated: June 5, 2026)
+The formation of gravitationally bound overdensities of dark matter (DM), or halos, is a generic
+prediction of theories with particle DM. We present a measurement of halo properties in 28 quadruple
+image strong lens systems recently observed by JWST, and use these observations to constrain the
+free-streaming length, λFS, of DM, a quantity that depends on the DM particle mass and formation
+mechanism. We improve on previous lensing analyses by simultaneously reconstructing extended
+lensed arcs with image positions and relative magnifications, enhancing sensitivity to perturbations
+by halos. Our analysis rules out deviations from the predictions of cold dark matter (CDM) on scales
+above 107.2M⊙and 107.4M⊙for subhalo abundance predicted by cosmological N-body simulations
+and semi-analytic models, respectively. These bounds correspond to upper limits λFS < 6.0 kpc and
+λFS < 7.0 kpc, and lower limits on the mass of a spin–1/2 thermal relic DM particle mtherm > 7.4 keV
+and mtherm > 6.5 keV. Conversely, assuming a negligible free-streaming length, as predicted by
+CDM, we measure a projected mass in subhalos around elliptical galaxies 1.7+2.6
+−1.2 × 107 M⊙kpc−2
+at 95% confidence. These inferences confirm key predictions of the CDM paradigm.
+Introduction—The physical properties of dark matter,
+such as its particle mass, formation mechanism, or possi-
+ble self-interactions, remain one of the most important
+unsolved questions in cosmology and modern physics.
+Cosmic gravitational probes of dark matter provide di-
+rect avenues to investigate these open questions [1–3].
+Cosmic probes, in most cases, do not aim to directly
+detect dark matter particles. Instead, they exploit the
+connection between the particle physics of dark matter
+and the properties of dark matter halos, self-gravitating
+∗Brinson Prize Fellow; gilmanda@uchicago.edu
+† anierenberg@ucmerced.edu
+⋆These authors contributed equally to this work
+overdensities of dark matter that permeate the cosmos.
+This Letter presents an inference on a key scale related
+to dark matter: the free-streaming length, λFS.
+Free-
+streaming refers to the process by which dark matter
+particles escape from density fluctuations initialized in
+the early Universe [4–6]. At later times, free-streaming
+manifests itself as a suppression of the overall abundance
+and concentrations of halos below a characteristic scale
+[7–9]. This scale depends on the velocity distribution of
+the dark matter particle at early times, which means in-
+ferences of halo abundance and structure can be recast
+as inferences on the dark matter particle mass and pro-
+duction mechanism. Dark matter models in which the
+free-streaming length becomes O (1 kpc) cause a devia-
+tion from the predictions of cold dark matter (CDM) on
+arXiv:2606.05277v1  [astro-ph.CO]  3 Jun 2026
+
+2
+mass scales comparable to dwarf galaxies, and are cate-
+gorized as warm dark matter (WDM).
+Strong gravitational lensing enables the detection of
+dark matter halos at cosmological distances, irrespective
+of whether halos contain detectable gas or stars. In a
+strong gravitational lens, a foreground deflector, typi-
+cally a massive elliptical galaxy [10], produces multiple
+magnified images of a background source. Dark matter
+halos, both in the plane of the lens and along the en-
+tire line of sight, impart perturbations to the image posi-
+tions and magnifications on angular scales much smaller
+than the typical size of the main deflector. Characteriz-
+ing these perturbations enables inferences of halo proper-
+ties directly through gravity, and is emerging as a leading
+cosmic probe of dark matter [11–21].
+This analysis considers a particular class of strong lens
+system in which a background quasar becomes quadru-
+ply imaged. The magnifications of lensed images depend
+on second derivatives of the gravitational potential pro-
+jected onto the plane of the lens, and the sensitivity to
+small-scale structure depends on the angular size of the
+source relative to the deflection angle produced by a per-
+turber [22]. For compact sources, such as a quasar, low-
+mass halos along the light travel path can significantly
+(de)magnify the images [23]. However, a very compact
+source can be substantially (de)magnified by stars in the
+main deflector galaxy, a phenomenon known as optically
+thick microlensing [24]. Studies of dark matter substruc-
+ture from lensed quasars must therefore measure emis-
+sion from an extended area around the quasar to avoid
+microlensing contamination.
+This Letter reports a new measurement of the free-
+streaming length of dark matter enabled by two major
+advances in the field of strong lensing investigations of
+dark matter substructure.
+First, we measure relative
+magnifications (flux ratios) using the JWST Mid-Infrared
+Instrument (MIRI) in 26 lensed quasars, doubling the
+sample size of lens systems suitable for a dark matter
+analysis, relative to previous work. The MIRI observa-
+tions detect mid-infrared emission from the warm dust re-
+gion surrounding the background quasar, which extends
+over 1–10 pc—large enough to avoid optically thick mi-
+crolensing [25–28], yet compact enough to experience per-
+turbations by dark substructures as small as 106 M⊙[29].
+The second significant improvement implemented in this
+analysis involves the joint modeling of image positions
+and flux ratios with lensed extended emission from the
+quasar host galaxy (hereafter lensed arcs). Simultaneous
+modeling of these data isolates small-scale perturbations
+by halos to the flux ratios from uncertainties associated
+with the mass profile of the main deflector. Companion
+papers describing the observations and flux ratio mea-
+surements [30], and the lens modeling and inference tech-
+niques [31] (hereafter G25) give additional details on the
+methods and results presented in this Letter.
+Free-streaming in warm dark matter models—Free-
+streaming of a dark matter particle that comprises 100%
+of the dark matter manifests itself as a cutoff in the lin-
+ear matter power spectrum. Following convention [32],
+we parametrize the WDM power spectrum in terms of a
+transfer function T (k)
+Pwdm (k)
+Pcdm (k) ≡T 2 (k) =
+
+1 + (αk)2ν−10/ν
+.
+(1)
+The effects of WDM on halo properties become signif-
+icant when the WDM power spectrum deviates signifi-
+cantly from the CDM prediction. This occurs on scales
+smaller than the half-mode wavenumber khm, defined via
+T (khm) = 1/2, which corresponds to the half-mode mass
+mhm = (4π/3) Ωmρcrit (π/khm)3 ,
+(2)
+where Ωm and ρcrit are the matter density and critical
+density of the Universe. The free-streaming length itself,
+λFS, corresponds approximately to the comoving distance
+traversed by dark matter particles before density fluctua-
+tions start growing appreciably, which occurs around the
+epoch of matter-radiation equality [33]. In practice, it is
+more common to define an effective free-streaming scale
+from Equation 1 as λFS ≡α. In our adopted cosmology
+[34], this gives
+λFS = 5.2
+ mhm
+107M⊙
+1/3
+kpc.
+(3)
+The shape of the transfer function depends on the mass
+and formation mechanism of the WDM particle. We con-
+sider the case of thermal relic particles of mass mtherm,
+which we can relate to the half-mode mass
+mhm = M0
+mtherm
+3 keV
+ζ
+M⊙.
+(4)
+In
+our
+adopted
+cosmology,
+for
+spin–1/2
+particles
+we have (M0, ζ, ν)
+=
+ 4.0 × 108M⊙, −3.564, 1.049
+
+,
+while
+for
+spin-3/2
+particles
+(M0, ζ, ν)
+=
+ 2.1 × 108M⊙, −3.585, 1.025
+
+[35].
+While this rela-
+tion is calibrated for thermal relic WDM, it proves a
+useful proxy for many other WDM models, such as
+sterile neutrinos, that possess a similarly shaped transfer
+function but typically have mhm and λFS(α) correspond
+to a different particle mass than mtherm [36–42].
+The effects of free-streaming on halo abundance and
+density profiles are borne out through high resolution
+cosmological simulations of nonlinear structure formation
+through N-body simulations and semi-analytic models.
+These simulations relate the halo mass function in CDM,
+dNcdm/dm, to mhm through a fitting function
+dNwdm
+dm
+(m, z) = dNcdm
+dm
+(m, z)
+
+1 +
+
+amhm
+m
+bc
+,
+(5)
+and give a similar parameterization of the concentration-
+mass relation
+cwdm (m, z) = ccdm (m, z)
+
+1 +
+
+a′ mhm
+m
+b′c′
+.
+(6)
+
+3
+We use fitting functions for the mass function and
+concentration-mass relation presented by Lovell [43] and
+Bose et al. [8], respectively, which give (a, b, c)
+=
+(2.1, 0.8, −1.0) and (a′, b′, c′) = (60, 1.0, −0.17). For the
+CDM concentration-mass relation, we use the model pre-
+sented by Diemer and Joyce [44].
+We model halos as
+Navarro-Frenk-White [45, hereafter NFW] profiles, and
+define halo mass in terms of the virial radius rvir = r200
+that encloses a mean density of 200ρcrit (z).
+We use Equations 5 and 6 to model dark matter sub-
+structure in the lens systems. For the line of sight pop-
+ulation, we use Equation 5 with the model presented by
+Sheth et al. [46] in place of dNcdm/dm, plus an enhance-
+ment of structure near the main deflector from cluster-
+ing effects predicted by hierarchical structure formation
+[16, 47], and an overall rescaling factor, δLOS, to account
+for variation in the number of line-of-sight halos from un-
+certainties in cosmological parameters and the halo mass
+function model.
+For subhalos, or halos gravitationally bound to the
+main deflector that orbit within the tidal field of a host,
+we use a mass function of the form
+d2N
+dmdA = Σsub
+m0
+(m/m0)α F (mhost, zd)
+(7)
+×
+
+1 +
+
+amhm
+m
+bc
+with a pivot scale m0
+=
+108M⊙.
+The parame-
+ters Σsub (units kpc−2) and α set the normaliza-
+tion and logarithmic slope.
+The term F (mhost, z) =
+ mhost/1013M⊙
+k1 (z + 0.5)k2, with k1 = 0.55 and k2 =
+−0.37 [48], accounts for the scaling of the projected num-
+ber density of subhalos with the host halo mass mhost and
+redshift zd. By including this term, Σsub and α become
+hierarchical parameters of the model, meaning they are
+common parameters to each lens in the sample. Given
+Σsub, α, and mhost, we generate a population of subha-
+los with masses and concentrations defined at infall. We
+then use the tidal evolution model presented by Du et al.
+[49] to predict the density profile of each subhalo, which
+we model as a tidally truncated NFW profile [50, 51].
+We render halos in the mass range 106−1010.7M⊙. Ha-
+los less massive than 106M⊙are too small to affect the
+data, while halos more massive than 1010.7M⊙host de-
+tectable galaxies, and we include these objects explicitly
+the lens model at their observed positions. Section IV in
+G25 provides further discussion regarding the modeling
+of dark matter substructure used in our simulations.
+Observations—We compiled several datasets to per-
+form the dark matter inference.
+Measurements of the
+relative point source brightnesses, or flux ratios, provide
+small scale (milliarcsecond) probes of the second deriva-
+tive of the gravitational potential, while imaging of the
+extended lensed arcs and image positions provide an arc-
+second scale constraint, primarily of the first derivative
+of the gravitational potential.
+The JWST lensed quasar dark matter survey (GO-
+2046) consists of observations of quadruply imaged
+quasars with MIRI targeting emission from the warm
+dust region surrounding the background quasar.
+This
+region is observed at low redshifts to be ∼1–10 pc in size
+with little dependence on the quasar luminosity [26–28].
+The warm dust region is compact enough to experience
+millilensing perturbations by halos, but extended enough
+(by ≳1 milliarcsecond at a typical source redshift z ∼2)
+to remove contamination from stellar microlensing. The
+spectral energy distribution of warm dust emission peaks
+at observed (rest frame) wavelengths of ∼20 µm (∼10
+µm).
+Given typical lensed image separations of a few
+tenths of arcseconds, JWST MIRI is the first observa-
+tory and instrument capable of reaching the necessary
+wavelength, with sufficient sensitivity and spatial reso-
+lution, to make these measurements. Nierenberg et al.
+[29] and Keeley et al. [30] describe the lens selection cri-
+teria for the survey, and detail the spectral energy dis-
+tribution fitting procedure used to separate warm dust
+emission from potentially microlensed emission emanat-
+ing from the more compact hot dust torus and quasar
+accretion disk.
+We supplement the 26 lenses observed by JWST with
+2 systems that were not observed through the MIRI pro-
+gram. For these systems, we use nuclear narrow-line flux
+ratios using emission lines in the rest-frame optical (ob-
+served frame near-IR) with Keck OSIRIS with Adaptive
+Optics [52] and the HST WFC3 grism [53]. The nuclear
+narrow-line region of quasars has typical physical sizes
+of ∼10-100 pc [52, 54–56] making it also insensitive to
+microlensing.
+We detect extended lensed arcs in 24/28 systems,
+and model the imaging data with the highest signal to
+noise ratio: HST F814W and F160W observations (10
+systems, HST-GO-15320 and HST-GO-15652 PI:Treu),
+JWST NIRCam F115W (3 systems, JWST GTO-1198 PI
+Stiavelli) and JWST MIRI F560W (11 systems, JWST
+GO 2046 PI:Nierenberg), as summarized by G25 in Table
+II.
+Analysis Method—Our goal is to infer the joint dis-
+tribution of the dark matter model parameters q =
+(Σsub, mhm, α, δLOS) given the data, D = (d1, d2, ..., dn),
+where for the nth lens the data vector dn consists of the
+image positions, flux ratios, and the surface brightness of
+the lensed arcs. The hyper-parameters q specify statisti-
+cal properties of the halo population, such as the average
+concentration of halos, or the amplitude of the (sub)halo
+mass function. The data depend on q through particular
+configurations, or realizations r, of halos. To evaluate the
+likelihood of the data given the model, we must therefore
+marginalize over many possible realizations
+L (dn|q) =
+Z
+p (dn|r, ξ) p (r|q) p (ξ) drdξ ,
+(8)
+where ξ represents nuisance parameters that describe the
+lens mass profile, the lens light profile, the lensed quasar
+host galaxy, the size of warm dust or nuclear narrow-
+line region from which we measure the flux ratios, the
+host halo mass, and the positions and masses of globular
+
+4
+clusters near lensed images.
+The likelihood function involves an integral over all
+possible configurations of the main deflector mass profile
+and the positions, masses, and density profiles of individ-
+ual (sub)halos. Our model for the main deflector mass
+profile is based on the observed structure of nearby mas-
+sive elliptical galaxies [10, 57–59], and includes azimuthal
+perturbations around isodensity contours (in projection)
+through an elliptical multipole expansion [60]. In previ-
+ous analyses, which used observations of image positions
+and flux ratios only, the lensing signal of low mass halos
+could be absorbed by these azimuthal features, and other
+transformations of the main deflector mass profile [e.g.
+61–64]. As we discuss further in Paper IV (see in partic-
+ular Section VI A), the extended arcs constrain the lens
+model across a larger area of the image plane, breaking
+some degeneracies between small scale structure and the
+mass profile of the main deflector. As dictated by Equa-
+tion 8, we marginalize over any remaining degeneracies
+when computing the likelihood function.
+Given the likelihood function for individual lens sys-
+tems from Equation 8, we compute the joint posterior
+distribution for the population
+p (q|D) ∝π (q)
+28
+Y
+n=1
+L (dn|q) ,
+(9)
+where π (q) is the prior probability. We assume a uni-
+form prior on δLOS within 0.9–1.1, allowing for ±10%
+variations in the number of line-of-sight halos relative to
+the predictions of the Sheth-Tormen halo mass function
+model [46]. We sample α between -1.95 and -1.85, which
+spans the range of theoretical uncertainties from simula-
+tions of non-linear structure formation [65–68]. We sam-
+ple log10 mhm/M⊙between 4–10. While mhm = 104M⊙
+is not formally consistent with CDM, these models are
+indistinguishable from CDM, given our data. Finally, we
+sample log10 Σsub/kpc−2 between -2.2 and 0.2. We sam-
+ple the background source size for the lenses observed
+by JWST MIRI from a uniform prior between 1-10 pc,
+and the source size for the systems with narrow-line flux
+ratios from a uniform prior between 20-80 pc.
+We use a forward modeling approach validated on sim-
+ulated datasets [16, 64, 69] to evaluate Equation 8. For
+each realization r, we construct a lens model, compute
+model-predicted datasets d′
+n (r, ξ) using multi-plane ray
+tracing, and compare these synthetic datasets with the
+observations to calculate the probability of the corre-
+sponding hyper-parameters q. We evaluate Equation 8
+by generating 0.5–22 million realizations per lens (176
+million realizations total).
+We perform gravitational
+lensing calculations with lenstronomy2 [70, 71], and
+generate populations of dark matter substructure using
+pyHalo3[17].
+2 https://github.com/lenstronomy/lenstronomy
+3 https://github.com/dangilman/pyHalo
+Priors on log10
+sub/kpc
+2
+uninformative prior 
+(
+2.2, 0.2)
+galacticus prior 
+(
+0.8, 0.2)
+N-body sims. prior 
+(
+1.0, 0.2)
+-2.2
+-1.6
+-1.0
+-0.4
+0.2
+log10
+sub/kpc
+2
+4.0
+5.5
+7.0
+8.5
+10.0
+log10 mhm/M
+4.0
+5.5
+7.0
+8.5
+10.0
+log10 mhm/M
+2
+4
+8
+16
+32
+mtherm [keV]
+FIG. 1.
+The joint posterior probability distribution for the
+normalization of the projected subhalo mass function (Σsub,
+Equation 7) and half-mode mass (mhm, Equation 2), jointly
+inferred from 28 lenses. The upper x-axis on the marginal
+distribution for mhm shows the corresponding spin-1/2 ther-
+mal relic particle mass.
+We show three different priors on
+Σsub. One-side 95% exclusion limits, and 10:1 Bayes factor
+constraints taken with respect to the peak of the marginal
+distribution, are summarized in Table I. Contours show 68%
+and 95% confidence regions.
+Results—Figure 1 shows the joint posterior distribu-
+tion p (Σsub, mhm|D), including the normalization of the
+subhalo mass function Σsub and the half-mode mass mhm.
+We marginalize over δLOS and α, the rescaling of the
+line-of-sight halo mass function and the logarithmic slope
+of the subhalo mass function, because these parameters
+are unconstrained within the range of the prior.
+The
+black distribution shows the inference with log-uniform
+priors on each hyper-parameter.
+For mhm < 105M⊙,
+the halo population is effectively indistinguishable from
+CDM with our data. For warmer models Σsub and mhm
+are correlated. Warmer models with additional massive
+subhalos can mimic the lensing signal of colder models
+with fewer massive subhalos.
+The semi-analytic model galacticus [72] and the
+Symphony N-body simulations [68] predict the ampli-
+tude of the bound subhalo mass function, meaning the
+amplitude of the subhalo mass function after account-
+ing for tidal stripping. These predictions effectively de-
+scribe the subhalo mass function amplitude on scales
+m ≫mhm, and correspond to Σsub ∼0.15 kpc−2 and
+Σsub ∼0.1 kpc−2, respectively [31, 48]. The green and
+magenta probability densities shown in Figure 1 show
+the inference after incorporating Gaussian priors on Σsub
+centered on these predictions, with a width of 0.2 dex,
+motivated by the differences between the predictions.
+
+5
+TABLE I. Lower bounds on the thermal relic particle mass mtherm derived from constraints on the half-mode mass mhm under
+different priors on log10 Σsub/kpc−2. We quote both the one-sided 95% exclusion limits, and the value of mmtherm disfavored
+at 10:1 odds (or a 10:1 Bayes factor).
+Spin-1/2
+Spin-3/2
+Prior on log10 Σsub/kpc−2
+Distribution
+95% excl.
+10:1 Bayes
+95% excl.
+10:1 Bayes
+Uninformative
+U(−2.2, 0.2)
+> 4.7 keV
+> 3.0 keV
+> 3.9 keV
+> 2.5 keV
+galacticus SAM
+N(−0.8, 0.2)
+> 9.6 keV
+> 6.5 keV
+> 8.0 keV
+> 5.4 keV
+N-body simulations
+N(−1.0, 0.2)
+> 10.2 keV
+> 7.4 keV
+> 8.5 keV
+> 6.2 keV
+The priors break covariance between Σsub and mhm. We
+infer (Bayes factor penalty of 10:1) upper bounds on
+mhm of 107.4M⊙and 107.2M⊙, for subhalo abundance
+predicted by galacticus and Symphony, respectively.
+These constraints correspond to upper limits on the effec-
+tive free-streaming scale (Equation 3) λFS < 7.0 kpc and
+λFS < 6.0 kpc, respectively. As summarized in Table I,
+these constraints translate to lower bounds on the mass of
+a spin–1/2 thermal relic particle of mtherm > 6.5 keV and
+mtherm > 7.4 keV. For spin–3/2 particles, the bounds
+correspond to mtherm > 5.4 keV and mtherm > 6.2 keV,
+respectively.
+Figure 2 shows the inference on subhalo abundance af-
+ter assuming a prior on log10 mhm/M⊙∼N (4.0, 0.5),
+which considers models in which mhm becomes too small
+to affect the data. The lower x-axis shows constraints on
+the bound mass function amplitude ¯fboundΣsub, where
+the mean bound mass fraction ¯fbound = 0.05 is approxi-
+mately independent of subhalo infall mass in CDM [49].
+The upper x-axis shows our measurement in terms of the
+projected mass in dark subhalos per unit area for halos
+with infall masses 106 < m/M⊙< 1010.7. For a typical
+lens system with a deflector (source) redshift zd = 0.5
+(zs = 2.0), we compute the projected mass density in
+subhalos, Σ, as (see Section VI C in G25)
+Σ = 6.2 × 106
+
+Σsub
+0.1 kpc−2
+
+M⊙kpc−2.
+(10)
+Similarly, we relate Σsub to the projected mass fraction
+in subhalos near lensed images, fsub, according to
+fsub = 0.012
+
+Σsub
+0.1 kpc−2
+
+.
+(11)
+At 95% confidence, we infer Σ = 1.7+2.6
+−1.2 ×107 M⊙kpc−2,
+or fsub = 3.2+5.1
+−2.3%.
+This measurement is consistent
+at the 2σ level with predictions from both galacticus
+(Σ = 0.9 × 107M⊙kpc−2) and Symphony (Σ = 0.6 ×
+107M⊙kpc−2), marked as vertical green and magenta
+bars in Figure 2.
+Discussion—These results place among the strongest
+bounds on the free-streaming length of dark matter from
+a single independent inference, and yield the most precise
+measurement of subhalo abundance around strong lenses
+to date. We note a tentative ∼1.8σ tension between our
+measurement of subhalo abundance and predictions from
+the Symphony N-body simulations [48, 68]. Additional
+0.4
+1.6
+6.2
+24.7
+98.3
+projected mass density [106M
+kpc
+2]
+-3.5
+-2.9
+-2.3
+-1.7
+-1.1
+log10 fbound
+sub/kpc
+2
+N-body sims
+galacticus
+CDM limit
+mhm < 105M
+FIG. 2.
+The posterior distribution of Σsub obtained from
+taking the CDM limit through a prior on the half-mode
+mass π (log10 mhm/M⊙) = N (4.0, 0.5).
+The color scheme
+is the same as the left panel of Figure 1.
+Vertical dashed
+lines represent 95% confidence intervals.
+Predictions from
+the semi-analytic model galacticus and N-body simulations
+are marked with vertical lines. The upper x-axis shows the
+corresponding projected mass density in subhalos with infall
+masses in the range 106 < m/M⊙< 1010.7.
+data will reduce the statistical uncertainties of our mea-
+surement, and reveal if this tension is real. If it persists,
+it could indicate either that N-body simulations slightly
+under-predict subhalo abundance around strong lens sys-
+tems, or that lenses include more sources of small-scale
+perturbation than expected. Possible factors that would
+lead us to infer higher subhalo abundance include an un-
+der estimation of the number of line of sight halos, or an
+under estimation of halo concentration.
+Our analysis provides a glimpse of the groundbreak-
+
+6
+ing dark matter science that will become the norm in
+the forthcoming era of large cosmological surveys, during
+which time we will discover hundreds of new quadruply
+imaged quasars [73, 74]. We expect further improvements
+in our constraints on WDM models if dark matter is cold,
+or a detection of a turnover in the halo mass function,
+if dark matter is warm [64]. Looking beyond WDM, the
+techniques we present can be applied to any model that
+alters the abundance and internal structure of halos, rel-
+ative to CDM. Notable examples include self-interacting
+dark matter, in which dark matter halos can undergo
+core collapse [20, 21, 69, 75], and modifications to the
+primordial matter power spectrum, which can increase
+both halo abundance and concentration [19, 76, 77]. Fi-
+nally, we note that the combination of strong lensing with
+other probes of small-scale structure, such as dwarf galax-
+ies [78] and stellar streams [79, 80], can break covari-
+ances present in each method when considered individu-
+ally, leading to more precise inferences of halo abundance
+and internal structure [81].
+ACKNOWLEDGMENTS
+We thank Alex Drlica-Wagner, Josh Frieman, and
+Ethan Nadler for helpful discussions. We also thank the
+anonymous referees for constructive feedback that im-
+proved the quality of this work.
+DG acknowledges support for this work provided by
+the Brinson Foundation through a Brinson Prize Fellow-
+ship grant.
+AMN, CG, MO and RK acknowledge support sup-
+port from the National Science Foundation through the
+grant “CAREER: An order of magnitude improvement in
+measurements of the physical properties of dark matter”
+NSF-AST-2442975.
+AMN, TT, XD, HP, CG, MO, RK acknowledge sup-
+port from the National Science Foundation through the
+grant “Collaborative Research: Measuring the physical
+properties of dark matter with strong gravitational lens-
+ing” NSF-AST-2205100, NSF-AST-2206315.
+DW acknowledges support by NSF through grants
+NSF-AST-1906976 and NSF-AST-1836016, and from the
+Moore Foundation through grant 8548.
+D. Sluse acknowledges the support of the Fonds de la
+Recherche Scientifique-FNRS, Belgium, under grant No.
+4.4503.1 and the Belgian Federal Science Policy Office
+(BELSPO) for the provision of financial support in the
+framework of the PRODEX Programme of the European
+Space Agency (ESA) under contract number 4000142531.
+P.M. acknowledges support from the National Science
+Foundation through grant NSF-AST-2407277.
+SB acknowledges support by the Department of
+Physics and Astronomy, Stony Brook University
+TA acknowledges support from ANID-FONDECYT
+Regular Project 1240105 and the ANID BASAL project
+FB210003.
+KNA acknowledges support by the U.S. National Sci-
+ence Foundation (NSF) Theoretical Physics Program
+Grant No. PHY-2210283.
+V.N.B. acknowledges funding support from STScI
+grant Nos. HST-GO-17103 and HST-AR-17063.
+SGD acknowledges a generous support from the Ajax
+Foundation.
+SFH acknowledges support through UK Research and
+Innovation (UKRI) under the UK government’s Horizon
+Europe Funding Guarantee (EP/Z533920/1, selected in
+the 2023 ERC Advanced Grant round) and an STFC
+Small Award (ST/Y001656/1).
+A. K. was supported by the U.S. Department of Energy
+(DOE) Grant No.
+DE-SC0009937; by World Premier
+International Research Center Initiative (WPI), MEXT,
+Japan; and by Japan Society for the Promotion of Science
+(JSPS) KAKENHI Grant No. JP20H05853.
+V.M. acknowledges support from ANID FONDECYT
+Regular grant number 1231418 and Centro de Astrof´ısica
+de Valpara´ıso CIDI 21.
+Part of this work was carried out at the Jet Propulsion
+Laboratory, California Institute of Technology, under a
+contract with NASA.
+MS acknowledges partial support from NASA grant
+80NSSC22K1294.
+K.C.W. is supported by JSPS KAKENHI Grant Num-
+bers JP24K07089, JP24H00221.
+This work is based on observations made with the
+James Webb Space Telescope through the Cycle 1 pro-
+gram JWST GO-2046 (PI:Nierenberg), and the Hub-
+ble Space Telescope through HST-GO-15320, HST-GO-
+15652, HST-GO-17916 (PI:Treu) and HST-GO-13732
+(PI:Nierenberg). Funding from NASA through this pro-
+grams is gratefully acknowledged.
+Some of the data presented herein were obtained at
+Keck Observatory, which is a private 501(c)3 non-profit
+organization operated as a scientific partnership among
+the California Institute of Technology, the University of
+California, and the National Aeronautics and Space Ad-
+ministration. The Keck facilities we used were LRIS and
+OSIRIS. The Observatory was made possible by the gen-
+erous financial support of the W. M. Keck Foundation.
+The authors wish to recognize and acknowledge the very
+significant cultural role and reverence that the summit
+of Maunakea has always had within the Native Hawaiian
+community. We are most fortunate to have the opportu-
+nity to conduct observations from this mountain.
+This research is based in part on data collected at the
+Subaru Telescope, which is operated by the National As-
+tronomical Observatory of Japan. We are honored and
+grateful for the opportunity of observing the Universe
+from Maunakea, which has cultural, historical, and nat-
+ural significance in Hawaii.
+This work used computational and storage services
+provided by the University of Chicago’s Research Com-
+puting Center;
+Caltech’s Resnick High Performance
+Computing Center through Carnegie Science’s part-
+nership; the Pinnacles (NSF MRI, # 2019144) and
+
+7
+CENVAL-ARC (NSF # 2346744) computing clusters
+at the Cyberinfrastructure and Research Technologies
+(CIRT) at University of California, Merced; and the Hoff-
+man2 Cluster which is operated by the UCLA Office of
+Advanced Research Computing’s Research Technology
+Group.
+SOFTWARE
+This work made use of astropy:4
+a community-
+developed core Python package and an ecosystem of
+tools and resources for astronomy [82–84]; cobyqa [85,
+86]; colossus [87]; lenstronomy5 [70, 71]; numpy [88];
+pyHalo6 [17]; trikde7; samana8; and scipy [89].
+DATA AVAILABILITY
+The data used in this article come from HST-GO-
+15320, HST-GO-15652, HST-GO-17917, HST-GO-13732
+and JWST GO-2046 and GTO-1198. The raw data are
+publicly available online (https://archive.stsci.edu/
+publishing/doi). Astrometry and and flux ratio mea-
+surements are presented by Keeley et al. [30], Nieren-
+berg et al. [52, 53], Keeley et al. [90]. Reduced imaging
+data for the systems analyzed in this work are available
+in the open-source software samana, which also provides
+notebooks that perform the lens modeling and scripts to
+reproduce the dark matter analysis.
+[1] M. R. Buckley and A. H. G. Peter, Gravitational probes
+of dark matter physics, Phys. Rept. 761, 1 (2018),
+arXiv:1712.06615 [astro-ph.CO].
+[2] K. K. Boddy, M. Lisanti, S. D. McDermott, N. L. Rodd,
+C. Weniger, Y. Ali-Ha¨ımoud, M. Buschmann, I. Cho-
+lis, D. Croon, A. L. Erickcek, V. Gluscevic, R. K. Leane,
+S. Mishra-Sharma, J. B. Mu˜noz, E. O. Nadler, P. Natara-
+jan, A. Price-Whelan, S. Vegetti, and S. J. Witte, Snow-
+mass2021 theory frontier white paper: Astrophysical and
+cosmological probes of dark matter, Journal of High En-
+ergy Astrophysics 35, 112 (2022), arXiv:2203.06380 [hep-
+ph].
+[3] A. Drlica-Wagner,
+C. Prescod-Weinstein,
+H.-B. Yu,
+A. Albert, M. Amin, A. Banerjee, M. Baryakhtar,
+K. Bechtol, S. Bird, S. Birrer, T. Bringmann, R. Caputo,
+S. Chakrabarti, T. Y. Chen, D. Croon, F.-Y. Cyr-Racine,
+W. A. Dawson, C. Dvorkin, V. Gluscevic, D. Gilman,
+D. Grin, R. Hloˇzek, R. K. Leane, T. S. Li, Y.-Y. Mao,
+J. Meyers, S. Mishra-Sharma, J. B. Mu˜noz, F. Mun-
+shi, E. O. Nadler, A. Parikh, K. Perez, A. H. G. Pe-
+ter, S. Profumo, K. Schutz, N. Sehgal, J. D. Simon,
+K. Sinha, M. Valluri, and R. H. Wechsler, Report of
+the Topical Group on Cosmic Probes of Dark Matter
+for Snowmass 2021, arXiv e-prints , arXiv:2209.08215
+(2022), arXiv:2209.08215 [hep-ph].
+[4] J. R. Bond and A. S. Szalay, The collisionless damping of
+density fluctuations in an expanding universe, ApJ 274,
+443 (1983).
+[5] V. Avila-Reese, P. Col´ın, O. Valenzuela, E. D’Onghia,
+and C. Firmani, Formation and Structure of Halos in a
+Warm Dark Matter Cosmology, ApJ 559, 516 (2001),
+arXiv:astro-ph/0010525 [astro-ph].
+[6] P. Bode, J. P. Ostriker, and N. Turok, Halo Forma-
+tion in Warm Dark Matter Models, ApJ 556, 93 (2001),
+arXiv:astro-ph/0010389 [astro-ph].
+4 http://www.astropy.org
+5 https://github.com/lenstronomy/lenstronomy
+6 https://github.com/dangilman/pyHalo
+7 https://github.com/dangilman/trikde
+8 https://github.com/dangilman/samana
+[7] A. Schneider, R. E. Smith, and D. Reed, Halo mass func-
+tion and the free streaming scale, MNRAS 433, 1573
+(2013), arXiv:1303.0839 [astro-ph.CO].
+[8] S. Bose, W. A. Hellwing, C. S. Frenk, A. Jenkins, M. R.
+Lovell, J. C. Helly, and B. Li, The Copernicus Complexio:
+statistical properties of warm dark matter haloes, MN-
+RAS 455, 318 (2016), arXiv:1507.01998 [astro-ph.CO].
+[9] A. D. Ludlow, S. Bose, R. E. Angulo, L. Wang, W. A.
+Hellwing, J. F. Navarro, S. Cole, and C. S. Frenk,
+The mass-concentration-redshift relation of cold and
+warm dark matter haloes, MNRAS 460, 1214 (2016),
+arXiv:1601.02624 [astro-ph.CO].
+[10] M. W. Auger, T. Treu, A. S. Bolton, R. Gavazzi,
+L. V. E. Koopmans, P. J. Marshall, L. A. Moustakas, and
+S. Burles, The Sloan Lens ACS Survey. X. Stellar, Dy-
+namical, and Total Mass Correlations of Massive Early-
+type Galaxies, ApJ 724, 511 (2010), arXiv:1007.2880
+[astro-ph.CO].
+[11] N. Dalal and C. S. Kochanek, Direct Detection of
+Cold Dark Matter Substructure, ApJ 572, 25 (2002),
+arXiv:astro-ph/0111456 [astro-ph].
+[12] S. Vegetti, D. J. Lagattuta, J. P. McKean, M. W. Auger,
+C. D. Fassnacht, and L. V. E. Koopmans, Gravitational
+detection of a low-mass dark satellite galaxy at cosmo-
+logical distance, Nat 481, 341 (2012), arXiv:1201.3643
+[astro-ph.CO].
+[13] Y. D. Hezaveh, N. Dalal, D. P. Marrone, Y.-Y. Mao,
+W. Morningstar, D. Wen, R. D. Blandford, J. E. Carl-
+strom, C. D. Fassnacht, G. P. Holder, A. Kemball,
+P. J. Marshall, N. Murray, L. Perreault Levasseur, J. D.
+Vieira, and R. H. Wechsler, Detection of Lensing Sub-
+structure Using ALMA Observations of the Dusty Galaxy
+SDP.81, ApJ 823, 37 (2016), arXiv:1601.01388 [astro-
+ph.CO].
+[14] S. Birrer, A. Amara, and A. Refregier, Lensing sub-
+structure quantification in RXJ1131-1231: a 2 keV lower
+bound on dark matter thermal relic mass, JCAP 2017,
+037 (2017), arXiv:1702.00009 [astro-ph.CO].
+[15] G. Despali, S. Vegetti, S. D. M. White, C. Giocoli, and
+F. C. van den Bosch, Modelling the line-of-sight contribu-
+tion in substructure lensing, MNRAS 475, 5424 (2018),
+arXiv:1710.05029 [astro-ph.CO].
+
+8
+[16] D. Gilman, S. Birrer, T. Treu, A. Nierenberg, and A. Ben-
+son, Probing dark matter structure down to 107 so-
+lar masses: flux ratio statistics in gravitational lenses
+with line-of-sight haloes, MNRAS 487, 5721 (2019),
+arXiv:1901.11031 [astro-ph.CO].
+[17] D. Gilman, S. Birrer, A. Nierenberg, T. Treu, X. Du,
+and A. Benson, Warm dark matter chills out:
+con-
+straints on the halo mass function and the free-streaming
+length
+of
+dark
+matter
+with
+eight
+quadruple-image
+strong gravitational lenses, MNRAS 491, 6077 (2020),
+arXiv:1908.06983 [astro-ph.CO].
+[18] J. W. Hsueh, W. Enzi, S. Vegetti, M. W. Auger, C. D.
+Fassnacht, G. Despali, L. V. E. Koopmans, and J. P.
+McKean, SHARP - VII. New constraints on the dark
+matter free-streaming properties and substructure abun-
+dance from gravitationally lensed quasars, MNRAS 492,
+3047 (2020), arXiv:1905.04182 [astro-ph.CO].
+[19] D. Gilman, A. Benson, J. Bovy, S. Birrer, T. Treu,
+and A. Nierenberg, The primordial matter power spec-
+trum on sub-galactic scales, MNRAS 512, 3163 (2022),
+arXiv:2112.03293 [astro-ph.CO].
+[20] D. Gilman,
+Y.-M. Zhong, and J. Bovy, Constrain-
+ing resonant dark matter self-interactions with strong
+gravitational lenses, PhysRevD 107, 103008 (2023),
+arXiv:2207.13111 [astro-ph.CO].
+[21] D. M. Powell,
+J. P. McKean,
+S. Vegetti,
+C. Sp-
+ingola,
+S. D. M. White, and C. D. Fassnacht, A
+million-solar-mass object detected at a cosmological dis-
+tance using gravitational imaging, Nature Astronomy
+10.1038/s41550-025-02651-2 (2025).
+[22] G. Dobler and C. R. Keeton, Finite source effects in
+strong lensing: implications for the substructure mass
+scale, MNRAS 365, 1243 (2006), arXiv:astro-ph/0502436
+[astro-ph].
+[23] S. Mao and P. Schneider, Evidence for substructure in
+lens galaxies?, MNRAS 295, 587 (1998), arXiv:astro-
+ph/9707187 [astro-ph].
+[24] J. Wambsganss, Gravitational microlensing, arXiv e-
+prints , astro (2006), arXiv:astro-ph/0604278.
+[25] D. Sluse, M. Kishimoto, T. Anguita, O. Wucknitz, and
+J. Wambsganss, Mid-infrared microlensing of accretion
+disc and dusty torus in quasars:
+effects on flux ratio
+anomalies, AA 553, A53 (2013), arXiv:1303.1176 [astro-
+ph.CO].
+[26] L. Burtscher, K. Meisenheimer, K. R. W. Tristram,
+W. Jaffe, S. F. H¨onig, R. I. Davies, M. Kishimoto, J. U.
+Pott, H. R¨ottgering, M. Schartmann, G. Weigelt, and
+S. Wolf, A diversity of dusty AGN tori. Data release for
+the VLTI/MIDI AGN Large Program and first results
+for 23 galaxies, Astronomy and Astrophysics 558, A149
+(2013).
+[27] J. H. Leftley, S. F. H¨onig, D. Asmus, K. R. W. Tris-
+tram, P. Gandhi, M. Kishimoto, M. Venanzi, and D. J.
+Williamson, Parsec-scale Dusty Winds in Active Galac-
+tic Nuclei: Evidence for Radiation Pressure Driving, ApJ
+886, 55 (2019).
+[28] S. F. H¨onig, Redefining the Torus: A Unifying View of
+AGNs in the Infrared and Submillimeter, ApJ 884, 171
+(2019).
+[29] A. M. Nierenberg, R. E. Keeley, D. Sluse, D. Gilman,
+S. Birrer, T. Treu, K. N. Abazajian, T. Anguita, A. J.
+Benson,
+V. N. Bennert,
+S. G. Djorgovski,
+X. Du,
+C. D. Fassnacht, S. F. Hoenig, A. Kusenko, C. Lemon,
+M. Malkan, V. Motta, L. A. Moustakas, D. Stern, and
+R. H. Wechsler, JWST lensed quasar dark matter sur-
+vey - I. Description and first results, MNRAS 530, 2960
+(2024), arXiv:2309.10101 [astro-ph.CO].
+[30] R. E. Keeley, A. M. Nierenberg, D. Gilman, T. Treu,
+X. Du, C. Gannon, P. Mozumdar, K. C. Wong, H. Paug-
+nat, S. Birrer, M. Malkan, A. J. Benson, K. N. Abaza-
+jian, T. Anguita, V. N. Bennert, S. G. Djorgovski,
+S. F. Hoenig, A. Kusenko, H. R. Larsson, T. Mor-
+ishita, V. Motta, L. A. Moustakas, W. Sheu, D. Sluse,
+D. Stern, M. Stiavelli, and D. Williams, JWST Lensed
+Quasar Dark Matter Survey III: Dark Matter Sensitive
+Flux Ratios and Warm Dark Matter Constraint from the
+Full Sample, arXiv e-prints , arXiv:2511.07765 (2025),
+arXiv:2511.07765 [astro-ph.CO].
+[31] D. Gilman, A. M. Nierenberg, T. Treu, C. Gannon,
+X. Du, H. Paugnat, S. Birrer, A. J. Benson, P. Mozum-
+dar, K. C. Wong, D. Williams, R. E. Keeley, K. N.
+Abazajian, T. Anguita, V. N. Bennert, S. G. Djorgov-
+ski, S. H. Hoenig, A. Kusenko, M. Malkan, T. Mor-
+ishita, V. Motta, L. A. Moustakas, W. Sheu, D. Sluse,
+D. Stern, and M. Stiavelli, JWST lensed quasar dark mat-
+ter survey IV: Stringent warm dark matter constraints
+from the joint reconstruction of extended lensed arcs
+and quasar flux ratios, arXiv e-prints , arXiv:2511.07513
+(2025), arXiv:2511.07513 [astro-ph.CO].
+[32] M. Viel, J. Lesgourgues, M. G. Haehnelt, S. Matarrese,
+and A. Riotto, Constraining warm dark matter candi-
+dates including sterile neutrinos and light gravitinos with
+WMAP and the Lyman-α forest, PhysRevD 71, 063534
+(2005), arXiv:astro-ph/0501562 [astro-ph].
+[33] E. W. Kolb and M. S. Turner, The early universe, Vol. 69
+(1990).
+[34] Planck Collaboration, N. Aghanim, Y. Akrami, M. Ash-
+down, J. Aumont, C. Baccigalupi, M. Ballardini, A. J.
+Banday, R. B. Barreiro, N. Bartolo, S. Basak, R. Battye,
+K. Benabed, J. P. Bernard, M. Bersanelli, P. Bielewicz,
+J. J. Bock, J. R. Bond, J. Borrill, F. R. Bouchet,
+F. Boulanger, M. Bucher, C. Burigana, R. C. Butler,
+E. Calabrese, J. F. Cardoso, J. Carron, A. Challinor,
+H. C. Chiang, J. Chluba, L. P. L. Colombo, C. Combet,
+D. Contreras, B. P. Crill, F. Cuttaia, P. de Bernardis,
+G. de Zotti, J. Delabrouille, J. M. Delouis, E. Di
+Valentino, J. M. Diego, O. Dor´e, M. Douspis, A. Ducout,
+X. Dupac, S. Dusini, G. Efstathiou, F. Elsner, T. A.
+Enßlin, H. K. Eriksen, Y. Fantaye, M. Farhang, J. Fer-
+gusson, R. Fernandez-Cobos, F. Finelli, F. Forastieri,
+M. Frailis, A. A. Fraisse, E. Franceschi, A. Frolov,
+S. Galeotta, S. Galli, K. Ganga, R. T. G´enova-Santos,
+M. Gerbino,
+T. Ghosh,
+J. Gonz´alez-Nuevo,
+K. M.
+G´orski, S. Gratton, A. Gruppuso, J. E. Gudmundsson,
+J. Hamann, W. Handley, F. K. Hansen, D. Herranz,
+S. R. Hildebrandt, E. Hivon, Z. Huang, A. H. Jaffe,
+W. C. Jones, A. Karakci, E. Keih¨anen, R. Keskitalo,
+K. Kiiveri, J. Kim, T. S. Kisner, L. Knox, N. Krach-
+malnicoff, M. Kunz, H. Kurki-Suonio, G. Lagache, J. M.
+Lamarre, A. Lasenby, M. Lattanzi, C. R. Lawrence,
+M. Le Jeune, P. Lemos, J. Lesgourgues, F. Levrier,
+A. Lewis, M. Liguori, P. B. Lilje, M. Lilley, V. Lind-
+holm, M. L´opez-Caniego, P. M. Lubin, Y. Z. Ma,
+J. F. Mac´ıas-P´erez, G. Maggio, D. Maino, N. Man-
+dolesi, A. Mangilli, A. Marcos-Caballero, M. Maris,
+P. G. Martin, M. Martinelli, E. Mart´ınez-Gonz´alez,
+S. Matarrese, N. Mauri, J. D. McEwen, P. R. Mein-
+hold, A. Melchiorri, A. Mennella, M. Migliaccio, M. Mil-
+
+9
+lea, S. Mitra, M. A. Miville-Deschˆenes, D. Molinari,
+L. Montier, G. Morgante, A. Moss, P. Natoli, H. U.
+Nørgaard-Nielsen, L. Pagano, D. Paoletti, B. Partridge,
+G. Patanchon, H. V. Peiris, F. Perrotta, V. Pettorino,
+F. Piacentini, L. Polastri, G. Polenta, J. L. Puget,
+J. P. Rachen, M. Reinecke, M. Remazeilles, A. Renzi,
+G. Rocha, C. Rosset, G. Roudier, J. A. Rubi˜no-Mart´ın,
+B. Ruiz-Granados, L. Salvati, M. Sandri, M. Savelainen,
+D. Scott, E. P. S. Shellard, C. Sirignano, G. Sirri, L. D.
+Spencer, R. Sunyaev, A. S. Suur-Uski, J. A. Tauber,
+D. Tavagnacco, M. Tenti, L. Toffolatti, M. Tomasi,
+T. Trombetti, L. Valenziano, J. Valiviita, B. Van Tent,
+L. Vibert, P. Vielva, F. Villa, N. Vittorio, B. D. Wan-
+delt, I. K. Wehus, M. White, S. D. M. White, A. Zac-
+chei, and A. Zonca, Planck 2018 results. VI. Cosmolog-
+ical parameters, AA 641, A6 (2020), arXiv:1807.06209
+[astro-ph.CO].
+[35] C. M. Vogel and K. N. Abazajian, Entering the era of
+measuring sub-Galactic dark matter structure: Accurate
+transfer functions for axino, gravitino, and sterile neu-
+trino thermal warm dark matter, PhysRevD 108, 043520
+(2023), arXiv:2210.10753 [hep-ph].
+[36] A. Kusenko, Sterile neutrinos, dark matter, and the pul-
+sar velocities in models with a Higgs singlet, Phys. Rev.
+Lett. 97, 241301 (2006), arXiv:hep-ph/0609081.
+[37] K. Petraki and A. Kusenko, Dark-matter sterile neutrinos
+in models with a gauge singlet in the Higgs sector, Phys.
+Rev. D 77, 065014 (2008), arXiv:0711.4646 [hep-ph].
+[38] K. Petraki, Small-scale structure formation properties of
+chilled sterile neutrinos as dark matter, Phys. Rev. D 77,
+105004 (2008), arXiv:0801.3470 [hep-ph].
+[39] A. Kusenko, Sterile neutrinos: The Dark side of the light
+fermions, Phys. Rept. 481, 1 (2009), arXiv:0906.2968
+[hep-ph].
+[40] K. N. Abazajian and A. Kusenko, Hidden treasures: Ster-
+ile neutrinos as dark matter with miraculous abundance,
+structure formation for different production mechanisms,
+and a solution to the σ8 problem, Phys. Rev. D 100,
+103513 (2019), arXiv:1907.11696 [hep-ph].
+[41] I. A. Zelko, T. Treu, K. N. Abazajian, D. Gilman, A. J.
+Benson, S. Birrer, A. M. Nierenberg, and A. Kusenko,
+Constraints on Sterile Neutrino Models from Strong
+Gravitational Lensing, Milky Way Satellites, and the
+Lyman-α Forest, Phys. Rev. Lett. 129, 191301 (2022),
+arXiv:2205.09777 [hep-ph].
+[42] J. St¨ucker, R. E. Angulo, O. Hahn, and S. D. M. White,
+Simulating the complexity of the dark matter sheet - II.
+Halo and subhalo mass functions for non-cold dark mat-
+ter models, MNRAS 509, 1703 (2022), arXiv:2109.09760
+[astro-ph.CO].
+[43] M. R. Lovell, Toward a General Parameterization of the
+Warm Dark Matter Halo Mass Function, ApJ 897, 147
+(2020), arXiv:2003.01125 [astro-ph.CO].
+[44] B.
+Diemer
+and
+M.
+Joyce,
+An
+Accurate
+Physical
+Model for Halo Concentrations, ApJ 871, 168 (2019),
+arXiv:1809.07326 [astro-ph.CO].
+[45] J. F. Navarro, C. S. Frenk, and S. D. M. White, A Uni-
+versal Density Profile from Hierarchical Clustering, ApJ
+490, 493 (1997), arXiv:astro-ph/9611107 [astro-ph].
+[46] R. K. Sheth, H. J. Mo, and G. Tormen, Ellipsoidal col-
+lapse and an improved model for the number and spa-
+tial distribution of dark matter haloes, MNRAS 323, 1
+(2001), arXiv:astro-ph/9907024 [astro-ph].
+[47] A. Lazar, J. S. Bullock, M. Boylan-Kolchin, R. Feld-
+mann,
+O. C¸atmabacak, and L. Moustakas, Out of
+sight, out of mind?
+The impact of correlated cluster-
+ing in substructure lensing, MNRAS 502, 6064 (2021),
+arXiv:2012.03958 [astro-ph.CO].
+[48] C. Gannon,
+A. Nierenberg,
+A. Benson,
+R. Keeley,
+X. Du, and D. Gilman, Dark matter substructure:
+A lensing perspective, PhysRevD 112, 023532 (2025),
+arXiv:2501.17362 [astro-ph.GA].
+[49] X. Du, D. Gilman, T. Treu, A. Benson, and C. Gan-
+non, Empirical model for the tidal evolution of dark
+matter substructure around strong gravitational lenses,
+PhysRevD 112, 023009 (2025), arXiv:2503.07728 [astro-
+ph.CO].
+[50] E. A. Baltz, P. Marshall, and M. Oguri, Analytic models
+of plausible gravitational lens potentials, JCAP 2009,
+015 (2009), arXiv:0705.0682 [astro-ph].
+[51] X. Du, A. Benson, Z. C. Zeng, T. Treu, A. H. G. Pe-
+ter, C. Mace, F. Jiang, S. Yang, C. Gannon, D. Gilman,
+A. M. Nierenberg, and E. O. Nadler, Tidal evolution
+of cored and cuspy dark matter halos, PhysRevD 110,
+023019 (2024), arXiv:2403.09597 [astro-ph.GA].
+[52] A. M. Nierenberg, T. Treu, S. A. Wright, C. D. Fass-
+nacht, and M. W. Auger, Detection of substructure with
+adaptive optics integral field spectroscopy of the grav-
+itational lens B1422+231, MNRAS 442, 2434 (2014),
+arXiv:1402.1496 [astro-ph.GA].
+[53] A. M. Nierenberg, D. Gilman, T. Treu, G. Brammer,
+S. Birrer, L. Moustakas, A. Agnello, T. Anguita, C. D.
+Fassnacht, V. Motta, A. H. G. Peter, and D. Sluse, Dou-
+ble dark matter vision: twice the number of compact-
+source lenses with narrow-line lensing and the WFC3
+grism, MNRAS 492, 5314 (2020), arXiv:1908.06344
+[astro-ph.GA].
+[54] L. A. Moustakas and R. B. Metcalf, Detecting dark mat-
+ter substructure spectroscopically in strong gravitational
+lenses, MNRAS 339, 607 (2003), arXiv:astro-ph/0206176
+[astro-ph].
+[55] F. M¨uller-S´anchez, M. A. Prieto, E. K. S. Hicks, H. Vives-
+Arias, R. I. Davies, M. Malkan, L. J. Tacconi, and
+R. Genzel, Outflows from Active Galactic Nuclei: Kine-
+matics of the Narrow-line and Coronal-line Regions in
+Seyfert Galaxies, ApJ 739, 69 (2011), arXiv:1107.3140
+[astro-ph.CO].
+[56] A. M. Nierenberg, T. Treu, G. Brammer, A. H. G. Pe-
+ter, C. D. Fassnacht, C. R. Keeton, C. S. Kochanek,
+K. B. Schmidt, D. Sluse, and S. A. Wright, Probing dark
+matter substructure in the gravitational lens HE 0435-
+1223 with the WFC3 grism, MNRAS 471, 2224 (2017),
+arXiv:1701.05188 [astro-ph.CO].
+[57] R. Bender, S. Doebereiner, and C. Moellenhoff, Isophote
+shapes of elliptical galaxies. I. The data., AAPS 74, 385
+(1988).
+[58] R. Gavazzi, T. Treu, J. D. Rhodes, L. V. E. Koopmans,
+A. S. Bolton, S. Burles, R. J. Massey, and L. A. Mous-
+takas, The Sloan Lens ACS Survey. IV. The Mass Density
+Profile of Early-Type Galaxies out to 100 Effective Radii,
+ApJ 667, 176 (2007), arXiv:astro-ph/0701589 [astro-ph].
+[59] M. S. H. Oh, A. Nierenberg, D. Gilman, and S. Bir-
+rer, Joint Semi-Analytic Multipole Priors from Galaxy
+Isophotes and Constraints from Lensed Arcs, arXiv
+e-prints , arXiv:2404.17124 (2024), arXiv:2404.17124
+[astro-ph.CO].
+
+10
+[60] H. Paugnat, T. Treu, and D. Gilman, Macromodel-
+free flux-ratio prediction in quadruply imaged quasars
+with local constraints from lensed arcs, arXiv e-prints
+,
+arXiv:2509.05416
+(2025),
+arXiv:2509.05416
+[astro-
+ph.CO].
+[61] C. S. Trotter, J. N. Winn, and J. N. Hewitt, A Multipole-
+Taylor Expansion for the Potential of the Gravitational
+Lens MG J0414+0534, ApJ 535, 671 (2000), arXiv:astro-
+ph/0001022 [astro-ph].
+[62] A. B. Congdon and C. R. Keeton, Multipole models of
+four-image gravitational lenses with anomalous flux ra-
+tios, MNRAS 364, 1459 (2005), arXiv:astro-ph/0510232
+[astro-ph].
+[63] J. S. Cohen, C. D. Fassnacht, C. M. O’Riordan, and
+S. Vegetti, General multipoles and their implications
+for dark matter inference, MNRAS 531, 3431 (2024),
+arXiv:2403.08895 [astro-ph.CO].
+[64] D. Gilman, S. Birrer, A. Nierenberg, and M. S. H.
+Oh, Turbocharging constraints on dark matter substruc-
+ture through a synthesis of strong lensing flux ratios
+and extended lensed arcs, MNRAS 533, 1687 (2024),
+arXiv:2403.03253 [astro-ph.CO].
+[65] V. Springel, J. Wang, M. Vogelsberger, A. Ludlow,
+A. Jenkins, A. Helmi, J. F. Navarro, C. S. Frenk,
+and S. D. M. White, The Aquarius Project: the sub-
+haloes of galactic haloes, MNRAS 391, 1685 (2008),
+arXiv:0809.0898 [astro-ph].
+[66] D. Fiacconi, P. Madau, D. Potter, and J. Stadel, Cold
+Dark Matter Substructures in Early-type Galaxy Halos,
+ApJ 824, 144 (2016), arXiv:1602.03526 [astro-ph.GA].
+[67] A. J. Benson, The normalization and slope of the dark
+matter (sub-)halo mass function on sub-galactic scales,
+MNRAS 493, 1268 (2020), arXiv:1911.04579 [astro-
+ph.GA].
+[68] E. O. Nadler, P. Mansfield, Y. Wang, X. Du, S. Ad-
+hikari, A. Banerjee, A. Benson, E. Darragh-Ford, Y.-
+Y. Mao, S. Wagner-Carena, R. H. Wechsler, and H.-Y.
+Wu, Symphony: Cosmological Zoom-in Simulation Suites
+over Four Decades of Host Halo Mass, ApJ 945, 159
+(2023), arXiv:2209.02675 [astro-ph.CO].
+[69] D. Gilman, J. Bovy, T. Treu, A. Nierenberg, S. Birrer,
+A. Benson, and O. Sameie, Strong lensing signatures of
+self-interacting dark matter in low-mass haloes, MNRAS
+507, 2432 (2021), arXiv:2105.05259 [astro-ph.CO].
+[70] S. Birrer and A. Amara, lenstronomy:
+Multi-purpose
+gravitational lens modelling software package, Physics
+of the Dark Universe 22, 189 (2018), arXiv:1803.09746
+[astro-ph.CO].
+[71] S. Birrer, A. Shajib, D. Gilman, A. Galan, J. Aalbers,
+M. Millon, R. Morgan, G. Pagano, J. Park, L. Teodori,
+N. Tessore, M. Ueland, L. Van de Vyvere, S. Wagner-
+Carena, E. Wempe, L. Yang, X. Ding, T. Schmidt,
+D. Sluse, M. Zhang, and A. Amara, lenstronomy II: A
+gravitational lensing software ecosystem, The Journal of
+Open Source Software 6, 3283 (2021), arXiv:2106.05976
+[astro-ph.CO].
+[72] A. J. Benson, G ALACTICUS: A semi-analytic model of
+galaxy formation, NewA 17, 175 (2012), arXiv:1008.1786
+[astro-ph.CO].
+[73] M. Oguri and P. J. Marshall, Gravitationally lensed
+quasars and supernovae in future wide-field optical imag-
+ing surveys, MNRAS 405, 2579 (2010), arXiv:1001.2037
+[astro-ph.CO].
+[74] A. J. Shajib,
+G. P. Smith,
+S. Birrer,
+A. Verma,
+N. Arendse, T. Collett, T. Daylan, S. Serjeant, and LSST
+Strong Lensing Science Collaboration, Strong gravita-
+tional lenses from the Vera C. Rubin Observatory, Philo-
+sophical Transactions of the Royal Society of London
+Series A 383, 20240117 (2025), arXiv:2406.08919 [astro-
+ph.CO].
+[75] W. J. R. Enzi, C. M. Krawczyk, D. J. Ballard, and
+T. E. Collett, The overconcentrated dark halo in the
+strong lens SDSS J0946 + 1006 is a subhalo: evidence for
+self-interacting dark matter?, MNRAS 540, 247 (2025),
+arXiv:2411.08565 [astro-ph.CO].
+[76] A. R. Zentner and J. S. Bullock, Halo Substructure and
+the Power Spectrum, ApJ 598, 49 (2003), arXiv:astro-
+ph/0304292 [astro-ph].
+[77] E. O. Nadler, V. Gluscevic, and A. Benson, The Effects
+of Linear Matter Power Spectrum Enhancement on Dark
+Matter Substructure, arXiv e-prints , arXiv:2507.16889
+(2025), arXiv:2507.16889 [astro-ph.CO].
+[78] E. O. Nadler, A. Drlica-Wagner, K. Bechtol, S. Mau,
+R. H. Wechsler, V. Gluscevic, K. Boddy, A. B. Pace,
+T. S. Li, M. McNanna, A. H. Riley, J. Garc´ıa-Bellido,
+Y. Y. Mao, G. Green, D. L. Burke, A. Peter, B. Jain,
+T. M. C. Abbott, M. Aguena, S. Allam, J. Annis,
+S. Avila, D. Brooks, M. Carrasco Kind, J. Carretero,
+M. Costanzi, L. N. da Costa, J. De Vicente, S. De-
+sai, H. T. Diehl, P. Doel, S. Everett, A. E. Evrard,
+B. Flaugher, J. Frieman, D. W. Gerdes, D. Gruen,
+R. A. Gruendl, J. Gschwend, G. Gutierrez, S. R. Hin-
+ton, K. Honscheid, D. Huterer, D. J. James, E. Krause,
+K. Kuehn, N. Kuropatkin, O. Lahav, M. A. G. Maia,
+J. L. Marshall, F. Menanteau, R. Miquel, A. Palmese,
+F. Paz-Chinch´on, A. A. Plazas, A. K. Romer, E. Sanchez,
+V. Scarpine, S. Serrano, I. Sevilla-Noarbe, M. Smith,
+M. Soares-Santos,
+E. Suchyta,
+M. E. C. Swanson,
+G. Tarle, D. L. Tucker, A. R. Walker, W. Wester, and
+DES Collaboration, Constraints on Dark Matter Proper-
+ties from Observations of Milky Way Satellite Galaxies,
+Phys. Rev. Lett. 126, 091101 (2021), arXiv:2008.00022
+[astro-ph.CO].
+[79] N. Banik, J. Bovy, G. Bertone, D. Erkal, and T. J. L. de
+Boer, Novel constraints on the particle nature of dark
+matter from stellar streams, JCAP 2021, 043 (2021),
+arXiv:1911.02663 [astro-ph.GA].
+[80] J. Nibauer, A. Bonaca, A. M. Price-Whelan, D. N.
+Spergel, and J. E. Greene, Measurement of Dark Mat-
+ter Substructure from the Kinematics of the GD-1 Stel-
+lar Stream, arXiv e-prints , arXiv:2510.02247 (2025),
+arXiv:2510.02247 [astro-ph.GA].
+[81] E. O. Nadler, S. Birrer, D. Gilman, R. H. Wechsler,
+X. Du, A. Benson, A. M. Nierenberg, and T. Treu, Dark
+Matter Constraints from a Unified Analysis of Strong
+Gravitational Lenses and Milky Way Satellite Galaxies,
+ApJ 917, 7 (2021), arXiv:2101.07810 [astro-ph.CO].
+[82] Astropy Collaboration, T. P. Robitaille, E. J. Tollerud,
+P.
+Greenfield,
+M.
+Droettboom,
+E.
+Bray,
+T.
+Ald-
+croft, M. Davis, A. Ginsburg, A. M. Price-Whelan,
+W. E. Kerzendorf, A. Conley, N. Crighton, K. Barbary,
+D. Muna, H. Ferguson, F. Grollier, M. M. Parikh, P. H.
+Nair, H. M. Unther, C. Deil, J. Woillez, S. Conseil,
+R. Kramer, J. E. H. Turner, L. Singer, R. Fox, B. A.
+Weaver, V. Zabalza, Z. I. Edwards, K. Azalee Bostroem,
+D. J. Burke, A. R. Casey, S. M. Crawford, N. Dencheva,
+J. Ely, T. Jenness, K. Labrie, P. L. Lim, F. Pierfed-
+
+11
+erici, A. Pontzen, A. Ptak, B. Refsdal, M. Servillat, and
+O. Streicher, Astropy: A community Python package for
+astronomy, AA 558, A33 (2013), arXiv:1307.6212 [astro-
+ph.IM].
+[83] Astropy Collaboration, A. M. Price-Whelan, B. M.
+Sip˝ocz, H. M. G¨unther, P. L. Lim, S. M. Crawford,
+S. Conseil, D. L. Shupe, M. W. Craig, N. Dencheva,
+A. Ginsburg, J. T. Vand erPlas, L. D. Bradley, D. P´erez-
+Su´arez, M. de Val-Borro, T. L. Aldcroft, K. L. Cruz,
+T. P. Robitaille, E. J. Tollerud, C. Ardelean, T. Babej,
+Y. P. Bach, M. Bachetti, A. V. Bakanov, S. P. Bam-
+ford, G. Barentsen, P. Barmby, A. Baumbach, K. L.
+Berry, F. Biscani, M. Boquien, K. A. Bostroem, L. G.
+Bouma, G. B. Brammer, E. M. Bray, H. Breytenbach,
+H. Buddelmeijer, D. J. Burke, G. Calderone, J. L. Cano
+Rodr´ıguez, M. Cara, J. V. M. Cardoso, S. Cheedella,
+Y. Copin, L. Corrales, D. Crichton, D. D’Avella, C. Deil,
+´E. Depagne, J. P. Dietrich, A. Donath, M. Droettboom,
+N. Earl, T. Erben, S. Fabbro, L. A. Ferreira, T. Finethy,
+R. T. Fox, L. H. Garrison, S. L. J. Gibbons, D. A. Gold-
+stein, R. Gommers, J. P. Greco, P. Greenfield, A. M.
+Groener, F. Grollier, A. Hagen, P. Hirst, D. Homeier,
+A. J. Horton, G. Hosseinzadeh, L. Hu, J. S. Hunkeler,
+ˇZ. Ivezi´c, A. Jain, T. Jenness, G. Kanarek, S. Kendrew,
+N. S. Kern, W. E. Kerzendorf, A. Khvalko, J. King,
+D. Kirkby, A. M. Kulkarni, A. Kumar, A. Lee, D. Lenz,
+S. P. Littlefair, Z. Ma, D. M. Macleod, M. Mastropietro,
+C. McCully, S. Montagnac, B. M. Morris, M. Mueller,
+S. J. Mumford, D. Muna, N. A. Murphy, S. Nelson, G. H.
+Nguyen, J. P. Ninan, M. N¨othe, S. Ogaz, S. Oh, J. K.
+Parejko, N. Parley, S. Pascual, R. Patil, A. A. Patil,
+A. L. Plunkett, J. X. Prochaska, T. Rastogi, V. Reddy
+Janga, J. Sabater, P. Sakurikar, M. Seifert, L. E. Sher-
+bert, H. Sherwood-Taylor, A. Y. Shih, J. Sick, M. T. Sil-
+biger, S. Singanamalla, L. P. Singer, P. H. Sladen, K. A.
+Sooley, S. Sornarajah, O. Streicher, P. Teuben, S. W.
+Thomas, G. R. Tremblay, J. E. H. Turner, V. Terr´on,
+M. H. van Kerkwijk, A. de la Vega, L. L. Watkins, B. A.
+Weaver, J. B. Whitmore, J. Woillez, V. Zabalza, and As-
+tropy Contributors, The Astropy Project: Building an
+Open-science Project and Status of the v2.0 Core Pack-
+age, AJ 156, 123 (2018), arXiv:1801.02634 [astro-ph.IM].
+[84] Astropy Collaboration, A. M. Price-Whelan, P. L. Lim,
+N. Earl, N. Starkman, L. Bradley, D. L. Shupe, A. A.
+Patil, L. Corrales, C. E. Brasseur, M. N”othe, A. Do-
+nath, E. Tollerud, B. M. Morris, A. Ginsburg, E. Va-
+her, B. A. Weaver, J. Tocknell, W. Jamieson, M. H. van
+Kerkwijk, T. P. Robitaille, B. Merry, M. Bachetti, H. M.
+G”unther, T. L. Aldcroft, J. A. Alvarado-Montes, A. M.
+Archibald, A. B’odi, S. Bapat, G. Barentsen, J. Baz’an,
+M. Biswas, M. Boquien, D. J. Burke, D. Cara, M. Cara,
+K. E. Conroy, S. Conseil, M. W. Craig, R. M. Cross, K. L.
+Cruz, F. D’Eugenio, N. Dencheva, H. A. R. Devillepoix,
+J. P. Dietrich, A. D. Eigenbrot, T. Erben, L. Ferreira,
+D. Foreman-Mackey, R. Fox, N. Freij, S. Garg, R. Geda,
+L. Glattly, Y. Gondhalekar, K. D. Gordon, D. Grant,
+P. Greenfield, A. M. Groener, S. Guest, S. Gurovich,
+R. Handberg, A. Hart, Z. Hatfield-Dodds, D. Homeier,
+G. Hosseinzadeh, T. Jenness, C. K. Jones, P. Joseph,
+J. B. Kalmbach, E. Karamehmetoglu, M. Kaluszy’nski,
+M. S. P. Kelley, N. Kern, W. E. Kerzendorf, E. W.
+Koch, S. Kulumani, A. Lee, C. Ly, Z. Ma, C. MacBride,
+J. M. Maljaars, D. Muna, N. A. Murphy, H. Nor-
+man, R. O’Steen, K. A. Oman, C. Pacifici, S. Pascual,
+J. Pascual-Granado, R. R. Patil, G. I. Perren, T. E. Pick-
+ering, T. Rastogi, B. R. Roulston, D. F. Ryan, E. S.
+Rykoff, J. Sabater, P. Sakurikar, J. Salgado, A. Sanghi,
+N. Saunders, V. Savchenko, L. Schwardt, M. Seifert-
+Eckert, A. Y. Shih, A. S. Jain, G. Shukla, J. Sick,
+C. Simpson, S. Singanamalla, L. P. Singer, J. Singhal,
+M. Sinha, B. M. SipHocz, L. R. Spitler, D. Stansby,
+O. Streicher, J. Sumak, J. D. Swinbank, D. S. Taranu,
+N. Tewary, G. R. Tremblay, M. d. Val-Borro, S. J. Van
+Kooten, Z. Vasovi’c, S. Verma, J. V. de Miranda Cardoso,
+P. K. G. Williams, T. J. Wilson, B. Winkel, W. M. Wood-
+Vasey, R. Xue, P. Yoachim, C. Zhang, A. Zonca, and As-
+tropy Project Contributors, The Astropy Project: Sus-
+taining and Growing a Community-oriented Open-source
+Project and the Latest Major Release (v5.0) of the Core
+Package, ApJ 935, 167 (2022), arXiv:2206.14220 [astro-
+ph.IM].
+[85] T. M. Ragonneau, Model-Based Derivative-Free Opti-
+mization Methods and Software, Ph.D. thesis, Depart-
+ment of Applied Mathematics, The Hong Kong Polytech-
+nic University, Hong Kong, China (2022).
+[86] T. M. Ragonneau and Z. Zhang, COBYQA Version 1.1.2
+(2024).
+[87] B. Diemer, COLOSSUS: A Python Toolkit for Cosmol-
+ogy, Large-scale Structure, and Dark Matter Halos, ApJS
+239, 35 (2018), arXiv:1712.04512 [astro-ph.CO].
+[88] C. R. Harris, K. J. Millman, S. J. van der Walt, R. Gom-
+mers, P. Virtanen, D. Cournapeau, E. Wieser, J. Tay-
+lor, S. Berg, N. J. Smith, R. Kern, M. Picus, S. Hoyer,
+M. H. van Kerkwijk, M. Brett, A. Haldane, J. F. del R´ıo,
+M. Wiebe, P. Peterson, P. G´erard-Marchant, K. Shep-
+pard, T. Reddy, W. Weckesser, H. Abbasi, C. Gohlke,
+and T. E. Oliphant, Array programming with NumPy,
+Nature 585, 357 (2020).
+[89] P. Virtanen, R. Gommers, T. E. Oliphant, M. Haber-
+land, T. Reddy, D. Cournapeau, E. Burovski, P. Pe-
+terson, W. Weckesser, J. Bright, S. J. van der Walt,
+M. Brett, J. Wilson, K. J. Millman, N. Mayorov, A. R. J.
+Nelson, E. Jones, R. Kern, E. Larson, C. J. Carey, ˙I. Po-
+lat, Y. Feng, E. W. Moore, J. VanderPlas, D. Laxalde,
+J. Perktold, R. Cimrman, I. Henriksen, E. A. Quintero,
+C. R. Harris, A. M. Archibald, A. H. Ribeiro, F. Pe-
+dregosa, P. van Mulbregt, and SciPy 1.0 Contributors,
+SciPy 1.0: Fundamental Algorithms for Scientific Com-
+puting in Python, Nature Methods 17, 261 (2020).
+[90] R. E. Keeley, A. M. Nierenberg, D. Gilman, C. Gan-
+non, S. Birrer, T. Treu, A. J. Benson, X. Du, K. N.
+Abazajian, T. Anguita, V. N. Bennert, S. G. Djorgov-
+ski, K. K. Gupta, S. F. Hoenig, A. Kusenko, C. Lemon,
+M. Malkan, V. Motta, L. A. Moustakas, M. S. H. Oh,
+D. Sluse, D. Stern, and R. H. Wechsler, JWST lensed
+quasar dark matter survey - II. Strongest gravitational
+lensing limit on the dark matter free streaming length to
+date, MNRAS 535, 1652 (2024), arXiv:2405.01620 [astro-
+ph.CO].
