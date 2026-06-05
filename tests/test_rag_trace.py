@@ -5,6 +5,7 @@ from app.services.rag_trace import (
     RAGTrace,
     TraceCollector,
 )
+from app.services.rag_trace_store import trace_steps_to_dicts
 
 
 class TestTraceStep:
@@ -132,3 +133,15 @@ class TestTraceCollector:
 
         steps = [s.step for s in trace.steps]
         assert steps == ["rewrite", "search", "rerank", "context", "generation"]
+
+    def test_trace_steps_to_dicts_contains_details(self):
+        trace = RAGTrace(trace_id="t1", org_id="o1", user_id="u1", query="q")
+        trace.add_step("embedding", duration_ms=12.34, details={"vector_dims": 1536})
+        trace.add_step("vector_search", duration_ms=45.6, details={"returned": 3})
+
+        steps = trace_steps_to_dicts(trace)
+
+        assert steps[0]["step"] == "embedding"
+        assert steps[0]["duration_ms"] == 12.34
+        assert steps[0]["details"]["vector_dims"] == 1536
+        assert steps[1]["step"] == "vector_search"

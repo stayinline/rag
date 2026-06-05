@@ -370,6 +370,19 @@ async def _persist_chat_turn(
     conversation.message_count = next_sequence_value + 2
     conversation.last_message_at = now
 
+    if trace_id:
+        from app.services.rag_trace import trace_collector
+        from app.services.rag_trace_store import save_rag_trace_detail
+
+        await save_rag_trace_detail(
+            db,
+            trace=trace_collector.get_trace(trace_id),
+            org_id=str(user["org_id"]),
+            user_id=str(user["user_id"]),
+            conversation_id=conversation.id,
+            message_id=assistant_message.id,
+        )
+
     await db.commit()
     await db.refresh(conversation)
     await db.refresh(assistant_message)

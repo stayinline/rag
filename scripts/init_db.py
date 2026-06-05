@@ -12,6 +12,7 @@ import app.models.document  # noqa: F401
 import app.models.audit  # noqa: F401
 import app.models.chunk  # noqa: F401
 import app.models.conversation  # noqa: F401
+import app.models.rag_trace  # noqa: F401
 import app.models.task  # noqa: F401
 import app.models.paper  # noqa: F401
 from app.database import engine

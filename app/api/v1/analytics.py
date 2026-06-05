@@ -24,6 +24,8 @@ from app.schemas.analytics import (
     LowRatedAnswerResponse,
     LowRatedAnswerItem,
     RAGAnalyticsSummary,
+    RAGTraceDetailResponse,
+    RAGTraceListResponse,
     AuditLogListResponse,
     AuditLogResponse,
 )
@@ -76,6 +78,9 @@ async def submit_feedback(
     )
     db.add(feedback)
     await db.commit()
+
+    from app.services.clickhouse import clickhouse_client
+    await clickhouse_client.update_trace_rating(org_id, trace_id, data.rating)
 
     # Write audit log
     from app.services.audit import write_audit_log
@@ -355,6 +360,26 @@ async def get_low_rated_answers(
             created_at=feedback.created_at if feedback else None,
         ))
 
+    if not items:
+        feedback_stmt = (
+            select(AnswerFeedback)
+            .where(
+                AnswerFeedback.org_id == org_id,
+                AnswerFeedback.rating <= 2,
+            )
+            .order_by(AnswerFeedback.created_at.desc())
+            .limit(limit)
+        )
+        result = await db.execute(feedback_stmt)
+        for feedback in result.scalars().all():
+            items.append(LowRatedAnswerItem(
+                message_id=feedback.message_id,
+                rating=feedback.rating,
+                reason_tags=feedback.reason_tags or [],
+                comment=feedback.comment,
+                created_at=feedback.created_at,
+            ))
+
     logger.info("Get low-rated answers complete org_id=%s user_id=%s returned=%s", org_id, user["user_id"], len(items))
     return LowRatedAnswerResponse(items=items, total=len(items))
 
@@ -371,6 +396,52 @@ async def get_analytics_summary(
     summary = await clickhouse_client.get_analytics_summary(org_id)
     logger.info("Get analytics summary complete org_id=%s user_id=%s keys=%s", org_id, user["user_id"], list(summary.keys()))
     return RAGAnalyticsSummary(**summary)
+
+
+# --- RAG Trace Details ---
+
+@router.get("/analytics/traces", response_model=RAGTraceListResponse)
+async def list_rag_traces(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """List recent per-request RAG trace details for the org."""
+    org_id = str(user["org_id"])
+    logger.info(
+        "List RAG traces request org_id=%s user_id=%s limit=%s offset=%s",
+        org_id,
+        user["user_id"],
+        limit,
+        offset,
+    )
+    from app.services.rag_trace_store import list_rag_trace_details
+
+    items, total = await list_rag_trace_details(db, org_id=org_id, limit=limit, offset=offset)
+    logger.info("List RAG traces complete org_id=%s user_id=%s total=%s returned=%s", org_id, user["user_id"], total, len(items))
+    return RAGTraceListResponse(
+        items=[RAGTraceDetailResponse.model_validate(item) for item in items],
+        total=total,
+    )
+
+
+@router.get("/analytics/traces/{trace_id}", response_model=RAGTraceDetailResponse)
+async def get_rag_trace(
+    trace_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get one per-request RAG trace detail by trace_id."""
+    org_id = str(user["org_id"])
+    logger.info("Get RAG trace request org_id=%s user_id=%s trace_id=%s", org_id, user["user_id"], trace_id)
+    from app.services.rag_trace_store import get_rag_trace_detail
+
+    trace = await get_rag_trace_detail(db, org_id=org_id, trace_id=trace_id)
+    if not trace:
+        logger.warning("Get RAG trace failed org_id=%s user_id=%s trace_id=%s reason=not_found", org_id, user["user_id"], trace_id)
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return RAGTraceDetailResponse.model_validate(trace)
 
 
 # --- Audit Logs ---

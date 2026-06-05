@@ -1,10 +1,22 @@
 """ClickHouse analytics service for RAG events."""
 import logging
+import math
 from dataclasses import dataclass, field
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+EMPTY_ANALYTICS_SUMMARY = {
+    "total_queries": 0,
+    "avg_latency_ms": 0.0,
+    "zero_result_rate": 0.0,
+    "avg_rating": 0.0,
+    "low_rating_rate": 0.0,
+    "avg_retrieved_count": 0.0,
+    "avg_reranked_count": 0.0,
+}
 
 
 @dataclass
@@ -162,6 +174,37 @@ class ClickHouseClient:
             logger.warning("Failed to write retrieval hit to ClickHouse: %s", e)
             return False
 
+    async def update_trace_rating(self, org_id: str, trace_id: str, rating: int) -> bool:
+        """Update the feedback rating for a stored trace event."""
+        try:
+            import httpx
+            logger.debug("ClickHouse update trace rating start trace_id=%s rating=%s", trace_id, rating)
+            query = (
+                "ALTER TABLE rag_trace_events "
+                f"UPDATE rating = {int(rating)} "
+                f"WHERE org_id = '{org_id}' AND trace_id = '{_escape(trace_id)}'"
+            )
+
+            async with httpx.AsyncClient(timeout=10, auth=self._auth) as client:
+                resp = await client.post(
+                    self.url,
+                    params={**self._params(query), "mutations_sync": "1"},
+                )
+                ok = resp.status_code == 200
+                if ok:
+                    logger.info("ClickHouse update trace rating complete trace_id=%s rating=%s", trace_id, rating)
+                else:
+                    logger.warning(
+                        "ClickHouse update trace rating returned non-200 trace_id=%s status_code=%s body_preview=%s",
+                        trace_id,
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                return ok
+        except Exception as e:
+            logger.warning("Failed to update trace rating in ClickHouse: %s", e)
+            return False
+
     async def get_zero_result_queries(
         self, org_id: str, limit: int = 50
     ) -> list[dict]:
@@ -244,29 +287,45 @@ class ClickHouseClient:
                     rows = data.get("data", [])
                     if rows:
                         row = rows[0]
-                        total = row.get("total_queries", 0)
+                        total = _safe_int(row.get("total_queries"))
+                        zero_results = _safe_int(row.get("zero_results"))
+                        low_ratings = _safe_int(row.get("low_ratings"))
                         summary = {
                             "total_queries": total,
-                            "avg_latency_ms": round(float(row.get("avg_latency_ms", 0)), 1),
-                            "avg_rating": round(float(row.get("avg_rating", 0)), 2),
-                            "avg_retrieved_count": round(float(row.get("avg_retrieved_count", 0)), 1),
-                            "avg_reranked_count": round(float(row.get("avg_reranked_count", 0)), 1),
-                            "zero_result_rate": round(row.get("zero_results", 0) / max(total, 1), 4),
-                            "low_rating_rate": round(row.get("low_ratings", 0) / max(total, 1), 4),
+                            "avg_latency_ms": round(_safe_float(row.get("avg_latency_ms")), 1),
+                            "avg_rating": round(_safe_float(row.get("avg_rating")), 2),
+                            "avg_retrieved_count": round(_safe_float(row.get("avg_retrieved_count")), 1),
+                            "avg_reranked_count": round(_safe_float(row.get("avg_reranked_count")), 1),
+                            "zero_result_rate": round(zero_results / max(total, 1), 4),
+                            "low_rating_rate": round(low_ratings / max(total, 1), 4),
                         }
                         logger.info("ClickHouse analytics summary complete org_id=%s total_queries=%s", org_id, total)
                         return summary
                 else:
                     logger.warning("ClickHouse analytics summary returned non-200 org_id=%s status_code=%s body_preview=%s", org_id, resp.status_code, resp.text[:300])
-            return {}
+            return dict(EMPTY_ANALYTICS_SUMMARY)
         except Exception as e:
             logger.warning("Failed to get analytics summary: %s", e)
-            return {}
+            return dict(EMPTY_ANALYTICS_SUMMARY)
 
 
 def _escape(s: str) -> str:
     """Escape string for SQL."""
     return s.replace("'", r"\'").replace("\\", r"\\")
+
+
+def _safe_float(value) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _safe_int(value) -> int:
+    return int(_safe_float(value))
 
 
 # Global client instance

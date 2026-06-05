@@ -151,6 +151,8 @@ export const getEvaluationRun = (runId) => api.get(`/evaluations/${runId}`).then
 export const getZeroResultQueries = () => api.get('/analytics/zero-result-queries').then((r) => r.data)
 export const getLowRatedAnswers = () => api.get('/analytics/low-rated-answers').then((r) => r.data)
 export const getAnalyticsSummary = () => api.get('/analytics/summary').then((r) => r.data)
+export const listRagTraces = (params = {}) => api.get('/analytics/traces', { params }).then((r) => r.data)
+export const getRagTrace = (traceId) => api.get(`/analytics/traces/${traceId}`).then((r) => r.data)
 
 // Audit Logs
 export const listAuditLogs = (params = {}) =>

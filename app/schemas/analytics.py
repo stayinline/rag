@@ -140,7 +140,7 @@ class LowRatedAnswerItem(BaseModel):
     rating: int
     reason_tags: list[str]
     comment: str | None
-    created_at: datetime
+    created_at: datetime | None = None
 
 
 class LowRatedAnswerResponse(BaseModel):
@@ -156,3 +156,33 @@ class RAGAnalyticsSummary(BaseModel):
     low_rating_rate: float
     avg_retrieved_count: float
     avg_reranked_count: float
+
+
+class RAGTraceStepResponse(BaseModel):
+    step: str
+    duration_ms: float = 0.0
+    started_at: str | None = None
+    details: dict = Field(default_factory=dict)
+
+
+class RAGTraceDetailResponse(BaseModel):
+    id: UUID
+    trace_id: str
+    conversation_id: UUID | None = None
+    message_id: UUID | None = None
+    query: str
+    answer_preview: str
+    answer_length: int
+    kb_ids: list[str] = Field(default_factory=list)
+    steps: list[RAGTraceStepResponse] = Field(default_factory=list)
+    total_latency_ms: int
+    model: str | None = None
+    prompt_version: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RAGTraceListResponse(BaseModel):
+    items: list[RAGTraceDetailResponse]
+    total: int

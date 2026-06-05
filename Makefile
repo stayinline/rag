@@ -1,4 +1,4 @@
-.PHONY: install migrate migrate-up init-db init-weaviate start worker start-all stop frontend-install frontend-dev frontend-build
+.PHONY: install migrate migrate-up init-db init-clickhouse init-weaviate start worker start-all stop frontend-install frontend-dev frontend-build
 
 install:
 	pip install -e ".[dev]"
@@ -11,6 +11,9 @@ migrate-up:
 
 init-db:
 	python scripts/init_db.py
+
+init-clickhouse:
+	python scripts/init_clickhouse.py --backfill-from-postgres
 
 init-weaviate:
 	python scripts/init_weaviate.py

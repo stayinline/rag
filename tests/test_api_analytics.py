@@ -1,5 +1,7 @@
 """Tests for Phase 3 API endpoints (feedback, evaluation, analytics, audit)."""
 import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +22,8 @@ def analytics_client(mock_settings):
 
     with patch("app.database.async_session", return_value=mock_sess), \
          patch("app.main.ensure_collection"), \
-         patch("app.services.audit.async_session", return_value=mock_audit_cm):
+         patch("app.services.audit.async_session", return_value=mock_audit_cm), \
+         patch("app.services.clickhouse.ClickHouseClient.update_trace_rating", AsyncMock(return_value=True)):
         from app.main import app
         from app.api.deps import get_current_user
         from app.database import get_db
@@ -175,6 +178,71 @@ class TestAnalyticsAPI:
             assert resp.status_code == 200
             data = resp.json()
             assert data["total_queries"] == 100
+
+    def test_list_rag_traces(self, analytics_client):
+        """Test listing RAG trace details."""
+        trace_id = str(uuid.uuid4())
+        trace = SimpleNamespace(
+            id=uuid.uuid4(),
+            trace_id=trace_id,
+            conversation_id=uuid.uuid4(),
+            message_id=uuid.uuid4(),
+            query="What is RAG?",
+            answer_preview="RAG answer",
+            answer_length=10,
+            kb_ids=[],
+            steps=[
+                {
+                    "step": "embedding",
+                    "duration_ms": 10.0,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "details": {"vector_dims": 1536},
+                }
+            ],
+            total_latency_ms=100,
+            model="qwen-plus",
+            prompt_version="v1",
+            created_at=datetime.now(timezone.utc),
+        )
+        with patch("app.services.rag_trace_store.list_rag_trace_details", AsyncMock(return_value=([trace], 1))):
+            resp = analytics_client.get("/api/v1/analytics/traces")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["trace_id"] == trace_id
+        assert data["items"][0]["steps"][0]["step"] == "embedding"
+
+    def test_get_rag_trace(self, analytics_client):
+        """Test getting one RAG trace detail."""
+        trace_id = str(uuid.uuid4())
+        trace = SimpleNamespace(
+            id=uuid.uuid4(),
+            trace_id=trace_id,
+            conversation_id=None,
+            message_id=None,
+            query="What is RAG?",
+            answer_preview="RAG answer",
+            answer_length=10,
+            kb_ids=[],
+            steps=[
+                {
+                    "step": "vector_search",
+                    "duration_ms": 20.0,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "details": {"returned": 5},
+                }
+            ],
+            total_latency_ms=120,
+            model="qwen-plus",
+            prompt_version="v1",
+            created_at=datetime.now(timezone.utc),
+        )
+        with patch("app.services.rag_trace_store.get_rag_trace_detail", AsyncMock(return_value=trace)):
+            resp = analytics_client.get(f"/api/v1/analytics/traces/{trace_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["trace_id"] == trace_id
+        assert data["steps"][0]["details"]["returned"] == 5
 
 
 class TestAuditLogsAPI:

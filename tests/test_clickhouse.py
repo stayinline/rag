@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from app.services.clickhouse import (
+    EMPTY_ANALYTICS_SUMMARY,
     RAGTraceEvent,
     RetrievalHitEvent,
     ClickHouseClient,
@@ -206,7 +207,35 @@ class TestClickHouseClient:
         client = ClickHouseClient(url="http://localhost:8123")
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await client.get_analytics_summary("o1")
-        assert result == {}
+        assert result == EMPTY_ANALYTICS_SUMMARY
+
+    @pytest.mark.asyncio
+    async def test_get_analytics_summary_error_returns_empty_summary(self):
+        """Test analytics summary returns a valid zero summary on query failure."""
+        mock_client = _make_async_context_mock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.text = "Unknown table"
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        client = ClickHouseClient(url="http://localhost:8123")
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await client.get_analytics_summary("o1")
+        assert result == EMPTY_ANALYTICS_SUMMARY
+
+    @pytest.mark.asyncio
+    async def test_update_trace_rating(self):
+        """Test updating a trace rating."""
+        mock_client = _make_async_context_mock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        client = ClickHouseClient(url="http://localhost:8123")
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await client.update_trace_rating("o1", "t1", 2)
+        assert result is True
+        assert "ALTER TABLE rag_trace_events" in mock_client.post.call_args.kwargs["params"]["query"]
 
 
 class TestEscape:

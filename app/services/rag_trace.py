@@ -2,6 +2,7 @@
 import hashlib
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,7 @@ class TraceStep:
     step: str  # auth, rewrite, search, rerank, context, generation, citation
     duration_ms: float = 0
     details: dict = field(default_factory=dict)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -29,6 +31,8 @@ class RAGTrace:
     input_tokens: int = 0
     output_tokens: int = 0
     error: str | None = None
+    answer_preview: str = ""
+    answer_length: int = 0
 
     def add_step(self, step: str, duration_ms: float = 0, details: dict | None = None):
         """Add a trace step."""

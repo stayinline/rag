@@ -128,16 +128,17 @@ def _retrieval_cache_key(
     )
 
 
-def _embed_query(query: str) -> list[float]:
+def _embed_query(query: str) -> tuple[list[float], bool, float]:
+    t0 = time.monotonic()
     cache_key = _query_cache_key(query)
     cached = _query_embedding_cache.get(cache_key, getattr(settings, "query_cache_ttl", 0))
     if cached is not None:
         logger.debug("Query embedding cache hit query_length=%s", len(query or ""))
-        return list(cached)
+        return list(cached), True, (time.monotonic() - t0) * 1000
 
     vector = embed_text(query)
     _query_embedding_cache.set(cache_key, tuple(vector), getattr(settings, "query_cache_ttl", 0))
-    return vector
+    return vector, False, (time.monotonic() - t0) * 1000
 
 
 def _build_where_filter(org_id: str, kb_ids: list[str], security_levels: list[str] | None = None) -> Filter:
@@ -217,7 +218,32 @@ def hybrid_search(
     if cached_sources is not None:
         results = _clone_sources(cached_sources)
         if trace:
-            trace.add_step("search", details={"retrieved_count": len(results), "cache_hit": True})
+            trace.add_step(
+                "embedding",
+                details={
+                    "skipped": True,
+                    "reason": "retrieval_cache_hit",
+                    "query_length": len(query or ""),
+                    "model": getattr(settings, "embedding_model", ""),
+                },
+            )
+            trace.add_step(
+                "vector_search",
+                details={
+                    "skipped": True,
+                    "reason": "retrieval_cache_hit",
+                    "top_k": top_k,
+                    "returned": len(results),
+                },
+            )
+            trace.add_step(
+                "search",
+                details={
+                    "retrieved_count": len(results),
+                    "cache_hit": True,
+                    "top_results": _summarize_sources(results, preview_chars=180),
+                },
+            )
         logger.info(
             "Hybrid search retrieval cache hit org_id=%s kb_ids=%s top_k=%s expand_query=%s returned=%s "
             "top_results=%s",
@@ -269,8 +295,7 @@ def hybrid_search(
     seen_ids = set()
 
     for q in queries:
-        query_start = time.monotonic()
-        query_vector = _embed_query(q)
+        query_vector, embedding_cache_hit, embedding_duration_ms = _embed_query(q)
         logger.debug(
             "Hybrid search embedding ready org_id=%s query=%r query_length=%s vector_dims=%s",
             org_id,
@@ -278,6 +303,20 @@ def hybrid_search(
             len(q or ""),
             len(query_vector),
         )
+        if trace:
+            trace.add_step(
+                "embedding",
+                duration_ms=embedding_duration_ms,
+                details={
+                    "query": format_log_text(q, 500),
+                    "query_length": len(q or ""),
+                    "vector_dims": len(query_vector),
+                    "model": getattr(settings, "embedding_model", ""),
+                    "cache_hit": embedding_cache_hit,
+                },
+            )
+
+        query_start = time.monotonic()
         response = collection.query.hybrid(
             query=q,
             vector=query_vector,
@@ -286,6 +325,11 @@ def hybrid_search(
             alpha=0.5,
             return_metadata=MetadataQuery(score=True),
         )
+        vector_search_duration_ms = (time.monotonic() - query_start) * 1000
+        top_results = [
+            _weaviate_to_source(obj, _metadata_score(obj.metadata))
+            for obj in response.objects[:5]
+        ]
         logger.info(
             "Hybrid search Weaviate query complete org_id=%s query=%r query_length=%s returned=%s "
             "duration_ms=%.2f top_results=%s",
@@ -293,11 +337,27 @@ def hybrid_search(
             format_log_text(q, 300),
             len(q or ""),
             len(response.objects),
-            (time.monotonic() - query_start) * 1000,
-            _summarize_sources(
-                [_weaviate_to_source(obj, _metadata_score(obj.metadata)) for obj in response.objects[:5]]
-            ),
+            vector_search_duration_ms,
+            _summarize_sources(top_results),
         )
+        if trace:
+            trace.add_step(
+                "vector_search",
+                duration_ms=vector_search_duration_ms,
+                details={
+                    "query": format_log_text(q, 500),
+                    "collection": COLLECTION_NAME,
+                    "top_k": top_k,
+                    "alpha": 0.5,
+                    "returned": len(response.objects),
+                    "filter": {
+                        "org_id": org_id,
+                        "status": "ready",
+                        "kb_ids": kb_ids,
+                    },
+                    "top_results": _summarize_sources(top_results, preview_chars=180),
+                },
+            )
         for obj in response.objects:
             obj_uuid = str(obj.uuid)
             if obj_uuid not in seen_ids:
@@ -313,7 +373,15 @@ def hybrid_search(
     )
     duration_ms = (time.monotonic() - t0) * 1000
     if trace:
-        trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
+        trace.add_step(
+            "search",
+            duration_ms=duration_ms,
+            details={
+                "retrieved_count": len(results),
+                "expanded_count": len(queries),
+                "top_results": _summarize_sources(results, preview_chars=180),
+            },
+        )
     logger.info(
         "Hybrid search complete org_id=%s kb_ids=%s expanded_count=%s unique_results=%s returned=%s "
         "duration_ms=%.2f top_results=%s",
@@ -338,6 +406,16 @@ def rerank_sources(
     t0 = time.monotonic()
     if not sources:
         logger.info("Rerank skipped reason=no_sources query_length=%s", len(query or ""))
+        if trace:
+            trace.add_step(
+                "rerank",
+                details={
+                    "skipped": True,
+                    "reason": "no_sources",
+                    "input_count": 0,
+                    "reranked_count": 0,
+                },
+            )
         return sources
 
     top_n = top_n or getattr(settings, "reranker_top_n", 10)
@@ -361,7 +439,16 @@ def rerank_sources(
 
     duration_ms = (time.monotonic() - t0) * 1000
     if trace:
-        trace.add_step("rerank", duration_ms=duration_ms, details={"reranked_count": len(reranked)})
+        trace.add_step(
+            "rerank",
+            duration_ms=duration_ms,
+            details={
+                "reranker": reranker.__class__.__name__,
+                "input_count": len(sources),
+                "reranked_count": len(reranked),
+                "top_results": _summarize_sources(reranked, preview_chars=180),
+            },
+        )
     logger.info(
         "Rerank complete reranker=%s input_count=%s returned=%s duration_ms=%.2f top_results=%s",
         reranker.__class__.__name__,
@@ -502,10 +589,36 @@ def assemble_context_and_generate(
     # Step 4: Build context
     context, citations = build_context(sources)
     if trace:
-        trace.add_step("context", details={"source_count": len(sources)})
+        trace.add_step(
+            "context",
+            details={
+                "source_count": len(sources),
+                "citation_count": len(citations),
+                "context_length": len(context),
+                "sources": _summarize_sources(sources, preview_chars=180),
+            },
+        )
 
     if not context.strip():
         trace.total_latency_ms = (time.monotonic() - t_start) * 1000
+        trace.answer_preview = "No relevant context found; answer generation skipped."
+        trace.answer_length = len(trace.answer_preview)
+        trace.add_step(
+            "llm_generation",
+            details={
+                "skipped": True,
+                "reason": "no_context",
+                "model": settings.llm_model,
+            },
+        )
+        trace.add_step(
+            "answer",
+            details={
+                "answer_length": trace.answer_length,
+                "answer_preview": trace.answer_preview,
+                "reason": "no_context",
+            },
+        )
         logger.info(
             "RAG pipeline complete trace_id=%s org_id=%s reason=no_context source_count=%s query=%r duration_ms=%.2f",
             trace_id,
@@ -560,7 +673,30 @@ def assemble_context_and_generate(
 
     gen_duration_ms = (time.monotonic() - t_gen_start) * 1000
     if trace:
-        trace.add_step("generation", duration_ms=gen_duration_ms)
+        trace.model = settings.llm_model
+        trace.prompt_version = "v1"
+        trace.answer_preview = format_log_text(accumulated, 1000)
+        trace.answer_length = len(accumulated)
+        trace.add_step(
+            "llm_generation",
+            duration_ms=gen_duration_ms,
+            details={
+                "model": settings.llm_model,
+                "prompt_version": "v1",
+                "context_length": len(context),
+                "source_count": len(sources),
+                "chunk_count": chunk_count,
+                "answer_length": len(accumulated),
+            },
+        )
+        trace.add_step(
+            "answer",
+            details={
+                "answer_length": len(accumulated),
+                "answer_preview": trace.answer_preview,
+                "source_count": len(sources),
+            },
+        )
     logger.info(
         "RAG generation complete trace_id=%s chunks=%s answer_length=%s duration_ms=%.2f",
         trace_id,
