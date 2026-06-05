@@ -5,6 +5,7 @@ import dashscope
 from dashscope import Generation
 
 from app.config import settings
+from app.logging_config import format_log_text
 
 logger = logging.getLogger(__name__)
 dashscope.api_key = settings.dashscope_api_key
@@ -37,12 +38,22 @@ def generate_stream(
     ]
 
     logger.info(
-        "LLM generation request start model=%s query_length=%s context_length=%s message_count=%s stream=%s",
+        "LLM generation request start model=%s query=%r query_length=%s context_length=%s message_count=%s "
+        "history_summary=%s stream=%s timeout=%s",
         settings.llm_model,
+        format_log_text(query, 500),
         len(query or ""),
         len(context or ""),
         len(full_messages),
+        [
+            {
+                "role": message.get("role"),
+                "content_length": len(message.get("content", "") or ""),
+            }
+            for message in full_messages
+        ],
         True,
+        settings.llm_timeout,
     )
     response = Generation.call(
         model=settings.llm_model,

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.config import settings
 from app.database import get_db
+from app.logging_config import format_log_text
 from app.models.conversation import Conversation, ConversationMessage
 from app.schemas.chat import ChatRequest, ChatStreamChunk
 from app.services.rag import assemble_context_and_generate
@@ -30,17 +31,26 @@ async def create_chat(
     start = time.monotonic()
     kb_ids = [str(kb) for kb in data.kb_ids] if data.kb_ids else []
     logger.info(
-        "Chat request org_id=%s user_id=%s kb_count=%s stream=%s conversation_id=%s query_length=%s",
+        "Chat request received org_id=%s user_id=%s stream=%s conversation_id=%s kb_ids=%s query=%r query_length=%s",
         user["org_id"],
         user["user_id"],
-        len(kb_ids),
         data.stream,
         data.conversation_id,
+        kb_ids,
+        format_log_text(data.query, 500),
         len(data.query or ""),
     )
     conversation, history_messages = await _load_conversation_context(db, user, data)
     history_message_count = len(history_messages)
     llm_messages = _build_llm_history_messages(history_messages)
+    logger.info(
+        "Chat context prepared org_id=%s user_id=%s conversation_id=%s history_messages=%s llm_messages=%s",
+        user["org_id"],
+        user["user_id"],
+        data.conversation_id,
+        history_message_count,
+        len(llm_messages),
+    )
 
     if data.stream:
 
@@ -91,12 +101,13 @@ async def create_chat(
                     if chunk.done:
                         logger.info(
                             "Chat stream complete org_id=%s user_id=%s trace_id=%s chunks=%s "
-                            "sources=%s duration_ms=%.2f",
+                            "sources=%s answer_length=%s duration_ms=%.2f",
                             user["org_id"],
                             user["user_id"],
                             chunk.trace_id,
                             chunk_count,
                             len(chunk.sources),
+                            len(full_answer),
                             (time.monotonic() - start) * 1000,
                         )
                     yield f"data: {json.dumps(chunk.model_dump(mode='json'), ensure_ascii=False)}\n\n"
@@ -363,12 +374,16 @@ async def _persist_chat_turn(
     await db.refresh(conversation)
     await db.refresh(assistant_message)
     logger.info(
-        "Chat turn persisted org_id=%s user_id=%s conversation_id=%s user_message_id=%s assistant_message_id=%s",
+        "Chat turn persisted org_id=%s user_id=%s conversation_id=%s user_message_id=%s assistant_message_id=%s "
+        "trace_id=%s answer_length=%s source_count=%s",
         user["org_id"],
         user["user_id"],
         conversation.id,
         user_message.id,
         assistant_message.id,
+        trace_id,
+        len(answer or ""),
+        len(sources or []),
     )
     return conversation.id, assistant_message.id
 

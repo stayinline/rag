@@ -115,7 +115,7 @@ export const deleteConversation = (id) =>
 
 // Search
 export const search = (query, kbIds = [], limit = 10) =>
-  api.post('/search', { query, kb_ids: kbIds, limit }).then((r) => r.data)
+  api.post('/search', { query, kb_ids: kbIds, top_k: limit }).then((r) => r.data)
 
 // Papers
 export const uploadPaper = (formData) =>

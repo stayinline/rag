@@ -5,6 +5,7 @@ import threading
 from typing import Any
 
 from app.config import settings
+from app.logging_config import format_log_text
 from app.services.embedding import embed_text
 from app.services.llm import generate_stream
 from app.services.weaviate_client import COLLECTION_NAME, get_client
@@ -177,6 +178,30 @@ def _metadata_score(metadata) -> float:
     return getattr(metadata, "score", None) or 0.0
 
 
+def _score_for_log(score: Any) -> float:
+    try:
+        return round(float(score or 0), 4)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _summarize_source(source: RAGSource, preview_chars: int = 120) -> dict:
+    return {
+        "chunk_id": source.chunk_id,
+        "document_id": source.document_id,
+        "title": format_log_text(source.document_title, 80),
+        "section_path": format_log_text(source.section_path, 120),
+        "page_start": source.page_start,
+        "page_end": source.page_end,
+        "score": _score_for_log(source.score),
+        "content_preview": format_log_text(source.content, preview_chars),
+    }
+
+
+def _summarize_sources(sources: list[RAGSource], limit: int = 5, preview_chars: int = 120) -> list[dict]:
+    return [_summarize_source(source, preview_chars) for source in sources[:limit]]
+
+
 def hybrid_search(
     query: str,
     org_id: str,
@@ -194,21 +219,24 @@ def hybrid_search(
         if trace:
             trace.add_step("search", details={"retrieved_count": len(results), "cache_hit": True})
         logger.info(
-            "Hybrid search retrieval cache hit org_id=%s kb_count=%s top_k=%s expand_query=%s returned=%s",
+            "Hybrid search retrieval cache hit org_id=%s kb_ids=%s top_k=%s expand_query=%s returned=%s "
+            "top_results=%s",
             org_id,
-            len(kb_ids),
+            kb_ids,
             top_k,
             expand_query,
             len(results),
+            _summarize_sources(results),
         )
         return results
 
     logger.info(
-        "Hybrid search start org_id=%s kb_count=%s top_k=%s expand_query=%s query_length=%s",
+        "Hybrid search start org_id=%s kb_ids=%s top_k=%s expand_query=%s query=%r query_length=%s",
         org_id,
-        len(kb_ids),
+        kb_ids,
         top_k,
         expand_query,
+        format_log_text(query, 500),
         len(query or ""),
     )
     queries = [query]
@@ -216,16 +244,24 @@ def hybrid_search(
         rewrite_result = rewrite_query(query)
         queries = rewrite_result.expanded
         logger.info(
-            "Hybrid search query rewrite complete org_id=%s expanded_count=%s entity_counts=%s",
+            "Hybrid search query rewrite complete org_id=%s expanded_count=%s entity_counts=%s queries=%s",
             org_id,
             len(queries),
             {k: len(v) for k, v in rewrite_result.entities.items()},
+            [format_log_text(item, 180) for item in queries[:5]],
         )
         if trace:
             trace.add_step("rewrite", details={"rewrite_count": len(queries)})
 
     client = get_client()
-    logger.debug("Hybrid search using Weaviate collection=%s", COLLECTION_NAME)
+    logger.info(
+        "Hybrid search using Weaviate collection=%s org_id=%s filter_org_id=%s filter_status=%s filter_kb_ids=%s",
+        COLLECTION_NAME,
+        org_id,
+        org_id,
+        "ready",
+        kb_ids,
+    )
     collection = client.collections.get(COLLECTION_NAME)
     where = _build_where_filter(org_id, kb_ids)
 
@@ -236,8 +272,9 @@ def hybrid_search(
         query_start = time.monotonic()
         query_vector = _embed_query(q)
         logger.debug(
-            "Hybrid search embedding ready org_id=%s query_length=%s vector_dims=%s",
+            "Hybrid search embedding ready org_id=%s query=%r query_length=%s vector_dims=%s",
             org_id,
+            format_log_text(q, 300),
             len(q or ""),
             len(query_vector),
         )
@@ -250,11 +287,16 @@ def hybrid_search(
             return_metadata=MetadataQuery(score=True),
         )
         logger.info(
-            "Hybrid search Weaviate query complete org_id=%s query_length=%s returned=%s duration_ms=%.2f",
+            "Hybrid search Weaviate query complete org_id=%s query=%r query_length=%s returned=%s "
+            "duration_ms=%.2f top_results=%s",
             org_id,
+            format_log_text(q, 300),
             len(q or ""),
             len(response.objects),
             (time.monotonic() - query_start) * 1000,
+            _summarize_sources(
+                [_weaviate_to_source(obj, _metadata_score(obj.metadata)) for obj in response.objects[:5]]
+            ),
         )
         for obj in response.objects:
             obj_uuid = str(obj.uuid)
@@ -273,13 +315,15 @@ def hybrid_search(
     if trace:
         trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
     logger.info(
-        "Hybrid search complete org_id=%s kb_count=%s expanded_count=%s unique_results=%s returned=%s duration_ms=%.2f",
+        "Hybrid search complete org_id=%s kb_ids=%s expanded_count=%s unique_results=%s returned=%s "
+        "duration_ms=%.2f top_results=%s",
         org_id,
-        len(kb_ids),
+        kb_ids,
         len(queries),
         len(all_results),
         len(results),
         duration_ms,
+        _summarize_sources(results),
     )
     return results
 
@@ -319,11 +363,12 @@ def rerank_sources(
     if trace:
         trace.add_step("rerank", duration_ms=duration_ms, details={"reranked_count": len(reranked)})
     logger.info(
-        "Rerank complete reranker=%s input_count=%s returned=%s duration_ms=%.2f",
+        "Rerank complete reranker=%s input_count=%s returned=%s duration_ms=%.2f top_results=%s",
         reranker.__class__.__name__,
         len(sources),
         len(reranked),
         duration_ms,
+        _summarize_sources(reranked),
     )
     return reranked
 
@@ -345,11 +390,21 @@ def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
 
     context = "\n---\n".join(context_parts)
     logger.info(
-        "Build context complete source_count=%s citation_count=%s context_length=%s duration_ms=%.2f",
+        "Build context complete source_count=%s citation_count=%s context_length=%s duration_ms=%.2f citations=%s",
         len(sources),
         len(citations),
         len(context),
         (time.monotonic() - t0) * 1000,
+        [
+            {
+                "chunk_id": item.get("chunk_id"),
+                "document_id": item.get("document_id"),
+                "title": format_log_text(item.get("document_title"), 80),
+                "score": _score_for_log(item.get("score")),
+                "page_start": item.get("page_start"),
+            }
+            for item in citations[:5]
+        ],
     )
     return context, citations
 
@@ -390,13 +445,16 @@ def assemble_context_and_generate(
     trace_id = str(uuid.uuid4())
     t_start = time.monotonic()
     logger.info(
-        "RAG pipeline start trace_id=%s org_id=%s user_id=%s kb_count=%s max_chunks=%s query_length=%s",
+        "RAG pipeline start trace_id=%s org_id=%s user_id=%s kb_ids=%s max_chunks=%s query=%r query_length=%s "
+        "history_messages=%s",
         trace_id,
         org_id,
         user_id or "anonymous",
-        len(kb_ids),
+        kb_ids,
         max_chunks,
+        format_log_text(query, 500),
         len(query or ""),
+        len(messages or []),
     )
 
     # Start trace
@@ -404,20 +462,41 @@ def assemble_context_and_generate(
 
     # Step 1: Hybrid search with optional query expansion
     retrieval_query = _build_history_aware_query(query, messages or [])
+    logger.info(
+        "RAG retrieval query prepared trace_id=%s uses_history=%s retrieval_query=%r retrieval_query_length=%s",
+        trace_id,
+        retrieval_query != query,
+        format_log_text(retrieval_query, 700),
+        len(retrieval_query or ""),
+    )
     sources = hybrid_search(retrieval_query, org_id, kb_ids, top_k=settings.rag_top_k, expand_query=True, trace=trace)
+    logger.info(
+        "RAG retrieval complete trace_id=%s source_count=%s top_results=%s",
+        trace_id,
+        len(sources),
+        _summarize_sources(sources),
+    )
 
     # Step 2: Rerank
     sources = rerank_sources(retrieval_query, sources, trace=trace)
+    logger.info(
+        "RAG rerank complete trace_id=%s source_count=%s top_results=%s",
+        trace_id,
+        len(sources),
+        _summarize_sources(sources),
+    )
 
     # Step 3: Truncate to max_chunks
     pre_truncate_count = len(sources)
     sources = sources[:max_chunks]
     logger.info(
-        "RAG source selection complete trace_id=%s retrieved_after_rerank=%s selected=%s max_chunks=%s",
+        "RAG source selection complete trace_id=%s retrieved_after_rerank=%s selected=%s max_chunks=%s "
+        "selected_sources=%s",
         trace_id,
         pre_truncate_count,
         len(sources),
         max_chunks,
+        _summarize_sources(sources),
     )
 
     # Step 4: Build context
@@ -428,9 +507,11 @@ def assemble_context_and_generate(
     if not context.strip():
         trace.total_latency_ms = (time.monotonic() - t_start) * 1000
         logger.info(
-            "RAG pipeline complete trace_id=%s org_id=%s reason=no_context duration_ms=%.2f",
+            "RAG pipeline complete trace_id=%s org_id=%s reason=no_context source_count=%s query=%r duration_ms=%.2f",
             trace_id,
             org_id,
+            len(sources),
+            format_log_text(query, 500),
             trace.total_latency_ms,
         )
         _write_trace_to_clickhouse(trace)
@@ -445,12 +526,13 @@ def assemble_context_and_generate(
     # Step 5: Generate answer (streaming)
     t_gen_start = time.monotonic()
     logger.info(
-        "RAG generation start trace_id=%s org_id=%s context_length=%s source_count=%s model=%s",
+        "RAG generation start trace_id=%s org_id=%s context_length=%s source_count=%s model=%s source_ids=%s",
         trace_id,
         org_id,
         len(context),
         len(sources),
         settings.llm_model,
+        [source.chunk_id for source in sources],
     )
     response = generate_stream(query=query, context=context, messages=messages)
 
@@ -462,6 +544,13 @@ def assemble_context_and_generate(
             if delta:
                 chunk_count += 1
                 accumulated += delta
+                logger.debug(
+                    "RAG generation chunk trace_id=%s chunk_index=%s delta_length=%s answer_length=%s",
+                    trace_id,
+                    chunk_count,
+                    len(delta),
+                    len(accumulated),
+                )
                 yield {
                     "delta": delta,
                     "done": False,

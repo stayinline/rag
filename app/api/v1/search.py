@@ -4,6 +4,7 @@ import time
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
+from app.logging_config import format_log_text
 from app.schemas.search import SearchRequest
 from app.services.rag import hybrid_search
 
@@ -19,12 +20,14 @@ async def search(
     start = time.monotonic()
     kb_ids = [str(kb) for kb in data.kb_ids]
     logger.info(
-        "Search request org_id=%s user_id=%s kb_count=%s top_k=%s query_length=%s",
+        "Search request received org_id=%s user_id=%s kb_ids=%s top_k=%s query=%r query_length=%s filters=%s",
         user["org_id"],
         user["user_id"],
-        len(kb_ids),
+        kb_ids,
         data.top_k,
+        format_log_text(data.query, 500),
         len(data.query or ""),
+        data.filters,
     )
     sources = hybrid_search(
         query=data.query,
@@ -49,15 +52,25 @@ async def search(
         })
 
     logger.info(
-        "Search complete org_id=%s user_id=%s results=%s duration_ms=%.2f top_chunk_id=%s",
+        "Search complete org_id=%s user_id=%s results=%s duration_ms=%.2f top_result=%s",
         user["org_id"],
         user["user_id"],
         len(results),
         (time.monotonic() - start) * 1000,
-        results[0]["chunk_id"] if results else None,
+        _summarize_search_result(results[0]) if results else None,
     )
     return {
         "query": data.query,
         "total": len(results),
         "results": results,
+    }
+
+
+def _summarize_search_result(result: dict) -> dict:
+    return {
+        "chunk_id": result.get("chunk_id"),
+        "document_id": result.get("document_id"),
+        "title": result.get("document_title"),
+        "score": result.get("combined_score"),
+        "page_start": result.get("page_start"),
     }

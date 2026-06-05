@@ -48,6 +48,16 @@ def get_request_id() -> str:
     return request_id_ctx.get()
 
 
+def format_log_text(value: Any, max_chars: int = 300) -> str:
+    """Compact free text for request logs while preserving enough detail to debug."""
+    if value is None:
+        return ""
+    text = " ".join(str(value).split())
+    if len(text) > max_chars:
+        return f"{text[:max_chars]}...<truncated {len(text)} chars>"
+    return text
+
+
 def safe_extra(data: dict[str, Any] | None) -> dict[str, Any]:
     """Remove sensitive or overly large values before logging structured details."""
     if not data:
