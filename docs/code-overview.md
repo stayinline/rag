@@ -344,7 +344,7 @@ Weaviate 中每条记录通过 `org_id`、`kb_id`、`document_id`、`document_ve
 | `parse_paper` | papers API | 论文一站式流水线 |
 | `run_evaluation` | analytics API | 对评测集跑检索指标 |
 
-Worker 内异步 DB 通过专用线程事件循环 `_run_async()` 执行，避免与 Celery 进程模型冲突。
+Worker 内异步 DB 通过 `_run_async()` 在当前 Celery 执行线程的独立事件循环中同步执行，避免多个并发任务共享同一个进程级事件循环。
 
 ---
 

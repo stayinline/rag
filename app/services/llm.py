@@ -32,8 +32,9 @@ def generate_stream(
     msg_list = messages or []
     full_messages = [
         {"role": "system", "content": system_msg},
+        *msg_list,
         {"role": "user", "content": query},
-    ] + msg_list
+    ]
 
     logger.info(
         "LLM generation request start model=%s query_length=%s context_length=%s message_count=%s stream=%s",

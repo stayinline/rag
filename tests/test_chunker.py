@@ -1,4 +1,5 @@
 """Tests for chunker service."""
+from unittest.mock import patch
 
 from app.services.chunker import chunk_text, count_tokens
 
@@ -79,3 +80,38 @@ def test_chunk_numbered_headings():
 """
     chunks = chunk_text(text, title="文档")
     assert len(chunks) >= 2
+
+
+def test_chunk_chinese_text_without_spaces_uses_token_boundaries():
+    text = "这是一个没有空格的中文段落，用于验证分块器不会依赖英文空格切词。" * 30
+
+    with patch("app.services.chunker.settings") as mock_settings:
+        mock_settings.rag_chunk_size = 80
+        mock_settings.rag_chunk_overlap = 20
+        chunks = chunk_text(text, title="中文文档")
+
+    assert len(chunks) > 1
+    assert all(count_tokens(chunk["content"]) <= 80 for chunk in chunks)
+    assert all(" " not in chunk["content"] for chunk in chunks)
+
+
+def test_chunk_overlap_is_measured_with_tokens():
+    text = " ".join(f"term{i}" for i in range(60))
+
+    with patch("app.services.chunker.settings") as mock_settings:
+        mock_settings.rag_chunk_size = 20
+        mock_settings.rag_chunk_overlap = 6
+        chunks = chunk_text(text, title="Overlap")
+
+    assert len(chunks) > 1
+    assert count_tokens(chunks[0]["content"]) <= 20
+    assert count_tokens(chunks[1]["content"]) <= 20
+    first_words = chunks[0]["content"].split()
+    second_words = chunks[1]["content"].split()
+    common_overlap = []
+    for size in range(min(len(first_words), len(second_words)), 0, -1):
+        if first_words[-size:] == second_words[:size]:
+            common_overlap = first_words[-size:]
+            break
+    assert common_overlap
+    assert count_tokens(" ".join(common_overlap)) <= 6

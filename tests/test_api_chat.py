@@ -109,9 +109,9 @@ def test_chat_unauthorized():
 def test_chat_with_conversation_id(test_client):
     conv_id = str(uuid.uuid4())
     conversation = _make_conversation(conv_id)
-    count_result = _mock_count_result(2)
+    messages_result = _mock_messages_result([])
     original_execute = test_client.mock_session.execute
-    test_client.mock_session.execute.side_effect = [conversation, count_result]
+    test_client.mock_session.execute.side_effect = [conversation, messages_result]
     with patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen:
         mock_gen.return_value = iter([
             {"delta": "Response", "done": False, "trace_id": "t1", "sources": []},
@@ -126,6 +126,49 @@ def test_chat_with_conversation_id(test_client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["conversation_id"] == conv_id
+    assert mock_gen.call_args.kwargs["messages"] == []
+    test_client.mock_session.execute = original_execute
+
+
+def test_chat_with_conversation_history_passes_summary_and_recent_messages(test_client):
+    conv_id = str(uuid.uuid4())
+    conversation = _make_conversation(conv_id)
+    history = [
+        _make_message(conv_id, "user", "第一轮用户问题：什么是免疫治疗？", 1),
+        _make_message(conv_id, "assistant", "第一轮助手回答：免疫治疗说明。", 2),
+        _make_message(conv_id, "user", "第二轮用户问题：它有哪些风险？", 3),
+        _make_message(conv_id, "assistant", "第二轮助手回答：风险包括免疫相关不良反应。", 4),
+        _make_message(conv_id, "user", "第三轮用户问题：适用人群是什么？", 5),
+        _make_message(conv_id, "assistant", "第三轮助手回答：需结合分型和指南。", 6),
+    ]
+    messages_result = _mock_messages_result(history)
+    original_execute = test_client.mock_session.execute
+    test_client.mock_session.execute.side_effect = [conversation, messages_result]
+
+    with patch("app.api.v1.chat.settings") as mock_settings, \
+         patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen:
+        mock_settings.llm_model = "configured-chat-model"
+        mock_settings.summary_after_rounds = 2
+        mock_settings.max_context_rounds = 1
+        mock_gen.return_value = iter([
+            {"delta": "Answer", "done": False, "trace_id": "t1", "sources": []},
+            {"delta": "", "done": True, "trace_id": "t1", "sources": []},
+        ])
+
+        resp = test_client.post(
+            "/api/v1/chat",
+            json={"query": "那它的禁忌是什么？", "conversation_id": conv_id, "stream": False},
+        )
+
+    assert resp.status_code == 200
+    llm_messages = mock_gen.call_args.kwargs["messages"]
+    assert llm_messages[0]["role"] == "system"
+    assert "第一轮用户问题" in llm_messages[0]["content"]
+    assert "第二轮助手回答" in llm_messages[0]["content"]
+    assert llm_messages[1:] == [
+        {"role": "user", "content": "第三轮用户问题：适用人群是什么？"},
+        {"role": "assistant", "content": "第三轮助手回答：需结合分型和指南。"},
+    ]
     test_client.mock_session.execute = original_execute
 
 
@@ -157,6 +200,23 @@ def _mock_count_result(count):
     result = type("Result", (), {})()
     result.scalar = lambda: count
     return result
+
+
+def _mock_messages_result(messages):
+    result = type("Result", (), {})()
+    result.scalars = lambda: type("Scalars", (), {"all": lambda self: messages})()
+    return result
+
+
+def _make_message(conversation_id, role, content, sequence):
+    message = type("ConversationMessage", (), {})()
+    message.id = uuid.uuid4()
+    message.conversation_id = uuid.UUID(str(conversation_id))
+    message.role = role
+    message.content = content
+    message.sequence = sequence
+    message.created_at = datetime.now(timezone.utc)
+    return message
 
 
 def _make_conversation(conv_id):

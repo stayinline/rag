@@ -3,7 +3,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Coroutine, TypeVar
 
 from sqlalchemy import update
 
@@ -23,40 +23,29 @@ from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-_worker_async_loop: asyncio.AbstractEventLoop | None = None
-_worker_async_loop_thread: threading.Thread | None = None
-_worker_async_loop_lock = threading.Lock()
+AsyncResultT = TypeVar("AsyncResultT")
+_worker_async_context = threading.local()
 
 
-def _get_worker_async_loop() -> asyncio.AbstractEventLoop:
-    global _worker_async_loop, _worker_async_loop_thread
-
-    with _worker_async_loop_lock:
-        if _worker_async_loop and _worker_async_loop.is_running():
-            return _worker_async_loop
-
+def _get_worker_thread_loop() -> asyncio.AbstractEventLoop:
+    loop = getattr(_worker_async_context, "loop", None)
+    if loop is None or loop.is_closed():
         loop = asyncio.new_event_loop()
-
-        def _run_loop() -> None:
-            asyncio.set_event_loop(loop)
-            loop.run_forever()
-
-        thread = threading.Thread(
-            target=_run_loop,
-            name="celery-worker-asyncio-loop",
-            daemon=True,
-        )
-        thread.start()
-        _worker_async_loop = loop
-        _worker_async_loop_thread = thread
-        return loop
+        asyncio.set_event_loop(loop)
+        _worker_async_context.loop = loop
+    return loop
 
 
-def _run_async(coro):
-    """Run async DB work on a stable loop owned by this worker process."""
-    loop = _get_worker_async_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result()
+def _run_async(coro: Coroutine[Any, Any, AsyncResultT]) -> AsyncResultT:
+    """Run async work on the current Celery execution thread's event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _get_worker_thread_loop()
+        return loop.run_until_complete(coro)
+
+    coro.close()
+    raise RuntimeError("_run_async must be called from a synchronous Celery task context")
 
 
 def _is_weaviate_duplicate_error(exc: Exception) -> bool:

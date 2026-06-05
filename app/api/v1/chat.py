@@ -38,6 +38,9 @@ async def create_chat(
         data.conversation_id,
         len(data.query or ""),
     )
+    conversation, history_messages = await _load_conversation_context(db, user, data)
+    history_message_count = len(history_messages)
+    llm_messages = _build_llm_history_messages(history_messages)
 
     if data.stream:
 
@@ -52,6 +55,7 @@ async def create_chat(
                     org_id=str(user["org_id"]),
                     kb_ids=kb_ids,
                     user_id=str(user["user_id"]),
+                    messages=llm_messages,
                 )
                 while True:
                     item = await anyio.to_thread.run_sync(_next_or_none, iterator)
@@ -71,6 +75,8 @@ async def create_chat(
                             answer=full_answer,
                             trace_id=last_trace_id,
                             sources=sources,
+                            conversation=conversation,
+                            next_sequence=history_message_count,
                         )
                     else:
                         conversation_id, message_id = data.conversation_id, None
@@ -84,7 +90,8 @@ async def create_chat(
                     )
                     if chunk.done:
                         logger.info(
-                            "Chat stream complete org_id=%s user_id=%s trace_id=%s chunks=%s sources=%s duration_ms=%.2f",
+                            "Chat stream complete org_id=%s user_id=%s trace_id=%s chunks=%s "
+                            "sources=%s duration_ms=%.2f",
                             user["org_id"],
                             user["user_id"],
                             chunk.trace_id,
@@ -115,6 +122,7 @@ async def create_chat(
             org_id=str(user["org_id"]),
             kb_ids=kb_ids,
             user_id=str(user["user_id"]),
+            messages=llm_messages,
         ):
             full_answer += item.get("delta", "")
             if item.get("done"):
@@ -137,6 +145,8 @@ async def create_chat(
             answer=full_answer,
             trace_id=trace_id,
             sources=sources,
+            conversation=conversation,
+            next_sequence=history_message_count,
         )
 
         return {
@@ -150,6 +160,115 @@ async def create_chat(
         }
 
 
+async def _load_conversation_context(
+    db: AsyncSession,
+    user: dict,
+    data: ChatRequest,
+) -> tuple[Conversation | None, list[ConversationMessage]]:
+    if not data.conversation_id:
+        return None, []
+
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == data.conversation_id,
+            Conversation.org_id == user["org_id"],
+            Conversation.user_id == user["user_id"],
+            Conversation.deleted_at.is_(None),
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        logger.warning(
+            "Chat conversation lookup failed org_id=%s user_id=%s conversation_id=%s reason=not_found",
+            user["org_id"],
+            user["user_id"],
+            data.conversation_id,
+        )
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages_result = await db.execute(
+        select(ConversationMessage)
+        .where(
+            ConversationMessage.org_id == user["org_id"],
+            ConversationMessage.conversation_id == conversation.id,
+            ConversationMessage.user_id == user["user_id"],
+        )
+        .order_by(ConversationMessage.sequence.asc(), ConversationMessage.created_at.asc())
+    )
+    messages = list(messages_result.scalars().all())
+    logger.info(
+        "Chat conversation context loaded org_id=%s user_id=%s conversation_id=%s messages=%s",
+        user["org_id"],
+        user["user_id"],
+        conversation.id,
+        len(messages),
+    )
+    return conversation, messages
+
+
+def _build_llm_history_messages(history_messages: list[ConversationMessage]) -> list[dict]:
+    if not history_messages:
+        return []
+
+    max_context_rounds = max(int(getattr(settings, "max_context_rounds", 2)), 0)
+    summary_after_rounds = max(int(getattr(settings, "summary_after_rounds", 2)), 0)
+    recent_message_count = max_context_rounds * 2
+
+    sorted_messages = sorted(
+        history_messages,
+        key=lambda message: (
+            getattr(message, "sequence", 0) or 0,
+            getattr(message, "created_at", datetime.min.replace(tzinfo=timezone.utc)),
+        ),
+    )
+    if summary_after_rounds <= 0 or len(sorted_messages) <= summary_after_rounds * 2:
+        older_messages = []
+        recent_messages = sorted_messages
+    else:
+        older_messages = sorted_messages[:-recent_message_count] if recent_message_count else sorted_messages
+        recent_messages = sorted_messages[-recent_message_count:] if recent_message_count else []
+
+    llm_messages = []
+    if older_messages:
+        llm_messages.append({"role": "system", "content": _summarize_history_for_prompt(older_messages)})
+
+    for message in recent_messages:
+        role = getattr(message, "role", "")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(getattr(message, "content", "") or "").strip()
+        if content:
+            llm_messages.append({"role": role, "content": content})
+
+    return llm_messages
+
+
+def _summarize_history_for_prompt(messages: list[ConversationMessage]) -> str:
+    lines = []
+    for message in messages:
+        role = getattr(message, "role", "")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(getattr(message, "content", "") or "").strip()
+        if not content:
+            continue
+        label = "用户" if role == "user" else "助手"
+        if len(content) > 500:
+            content = f"{content[:500]}..."
+        lines.append(f"{label}: {content}")
+
+    summary = "\n".join(lines)
+    max_summary_chars = 4000
+    if len(summary) > max_summary_chars:
+        summary = summary[-max_summary_chars:]
+
+    return (
+        "以下是本轮之前较早对话的压缩摘要。回答当前问题时必须结合这些历史事实、约束、用户偏好和指代关系；"
+        "如果摘要与最新原文消息冲突，以最新原文消息为准。\n"
+        f"{summary}"
+    )
+
+
 async def _persist_chat_turn(
     db: AsyncSession,
     user: dict,
@@ -157,11 +276,13 @@ async def _persist_chat_turn(
     answer: str,
     trace_id: str | None,
     sources: list,
+    conversation: Conversation | None = None,
+    next_sequence: int | None = None,
 ) -> tuple[UUID, UUID]:
     now = datetime.now(timezone.utc)
     kb_ids = [str(kb_id) for kb_id in data.kb_ids] if data.kb_ids else []
 
-    if data.conversation_id:
+    if conversation is None and data.conversation_id:
         result = await db.execute(
             select(Conversation).where(
                 Conversation.id == data.conversation_id,
@@ -179,7 +300,7 @@ async def _persist_chat_turn(
                 data.conversation_id,
             )
             raise HTTPException(status_code=404, detail="Conversation not found")
-    else:
+    elif conversation is None:
         conversation = Conversation(
             id=uuid4(),
             org_id=user["org_id"],
@@ -192,8 +313,8 @@ async def _persist_chat_turn(
         db.add(conversation)
         await db.flush()
 
-    next_sequence = conversation.message_count or 0
-    if data.conversation_id:
+    next_sequence_value = next_sequence if next_sequence is not None else (conversation.message_count or 0)
+    if data.conversation_id and next_sequence is None:
         count_result = await db.execute(
             select(func.count())
             .select_from(ConversationMessage)
@@ -203,7 +324,7 @@ async def _persist_chat_turn(
                 ConversationMessage.user_id == user["user_id"],
             )
         )
-        next_sequence = count_result.scalar() or next_sequence
+        next_sequence_value = count_result.scalar() or next_sequence_value
 
     user_message = ConversationMessage(
         id=uuid4(),
@@ -212,7 +333,7 @@ async def _persist_chat_turn(
         user_id=user["user_id"],
         role="user",
         content=data.query,
-        sequence=next_sequence + 1,
+        sequence=next_sequence_value + 1,
         kb_ids=kb_ids,
     )
     assistant_message = ConversationMessage(
@@ -222,7 +343,7 @@ async def _persist_chat_turn(
         user_id=user["user_id"],
         role="assistant",
         content=answer,
-        sequence=next_sequence + 2,
+        sequence=next_sequence_value + 2,
         trace_id=trace_id,
         sources=sources,
         kb_ids=kb_ids,
@@ -235,7 +356,7 @@ async def _persist_chat_turn(
     existing_kb_ids = conversation.kb_ids or []
     if kb_ids and not existing_kb_ids:
         conversation.kb_ids = kb_ids
-    conversation.message_count = next_sequence + 2
+    conversation.message_count = next_sequence_value + 2
     conversation.last_message_at = now
 
     await db.commit()

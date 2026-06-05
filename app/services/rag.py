@@ -1,6 +1,8 @@
 import time
 import uuid
 import logging
+import threading
+from typing import Any
 
 from app.config import settings
 from app.services.embedding import embed_text
@@ -13,11 +15,46 @@ from app.services.reranker import get_reranker
 logger = logging.getLogger(__name__)
 
 
+class _TTLCache:
+    def __init__(self) -> None:
+        self._items: dict[tuple[Any, ...], tuple[float, Any]] = {}
+        self._lock = threading.RLock()
+
+    def get(self, key: tuple[Any, ...], ttl: int) -> Any | None:
+        if ttl <= 0:
+            return None
+        now = time.monotonic()
+        with self._lock:
+            item = self._items.get(key)
+            if item is None:
+                return None
+            expires_at, value = item
+            if expires_at <= now:
+                self._items.pop(key, None)
+                return None
+            return value
+
+    def set(self, key: tuple[Any, ...], value: Any, ttl: int) -> None:
+        if ttl <= 0:
+            return
+        with self._lock:
+            self._items[key] = (time.monotonic() + ttl, value)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+
+_query_embedding_cache = _TTLCache()
+_retrieval_cache = _TTLCache()
+
+
 class RAGSource:
     def __init__(self, chunk_id: str, document_id: str, document_title: str,
                  section_path: str | None, page_start: int | None, page_end: int | None,
                  score: float, content_preview: str,
                  document_type: str = "general", section_type: str | None = None):
+        content = content_preview or ""
         self.chunk_id = chunk_id
         self.document_id = document_id
         self.document_title = document_title
@@ -25,9 +62,24 @@ class RAGSource:
         self.page_start = page_start
         self.page_end = page_end
         self.score = score
-        self.content_preview = content_preview[:300]
+        self.content = content
+        self.content_preview = content[:300]
         self.document_type = document_type
         self.section_type = section_type
+
+    def clone(self) -> "RAGSource":
+        return RAGSource(
+            chunk_id=self.chunk_id,
+            document_id=self.document_id,
+            document_title=self.document_title,
+            section_path=self.section_path,
+            page_start=self.page_start,
+            page_end=self.page_end,
+            score=self.score,
+            content_preview=self.content,
+            document_type=self.document_type,
+            section_type=self.section_type,
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -42,6 +94,49 @@ class RAGSource:
             "document_type": self.document_type,
             "section_type": self.section_type,
         }
+
+
+def _clear_rag_caches() -> None:
+    _query_embedding_cache.clear()
+    _retrieval_cache.clear()
+
+
+def _clone_sources(sources: list[RAGSource]) -> list[RAGSource]:
+    return [source.clone() for source in sources]
+
+
+def _query_cache_key(query: str) -> tuple[Any, ...]:
+    return ("embedding", getattr(settings, "embedding_model", ""), query or "")
+
+
+def _retrieval_cache_key(
+    query: str,
+    org_id: str,
+    kb_ids: list[str],
+    top_k: int,
+    expand_query: bool,
+) -> tuple[Any, ...]:
+    return (
+        "retrieval",
+        org_id,
+        tuple(sorted(str(kb_id) for kb_id in kb_ids)),
+        top_k,
+        expand_query,
+        bool(getattr(settings, "query_expansion", True)),
+        query or "",
+    )
+
+
+def _embed_query(query: str) -> list[float]:
+    cache_key = _query_cache_key(query)
+    cached = _query_embedding_cache.get(cache_key, getattr(settings, "query_cache_ttl", 0))
+    if cached is not None:
+        logger.debug("Query embedding cache hit query_length=%s", len(query or ""))
+        return list(cached)
+
+    vector = embed_text(query)
+    _query_embedding_cache.set(cache_key, tuple(vector), getattr(settings, "query_cache_ttl", 0))
+    return vector
 
 
 def _build_where_filter(org_id: str, kb_ids: list[str], security_levels: list[str] | None = None) -> Filter:
@@ -92,6 +187,22 @@ def hybrid_search(
 ) -> list[RAGSource]:
     """Hybrid search with permission filters and optional query expansion."""
     t0 = time.monotonic()
+    retrieval_cache_key = _retrieval_cache_key(query, org_id, kb_ids, top_k, expand_query)
+    cached_sources = _retrieval_cache.get(retrieval_cache_key, getattr(settings, "retrieval_cache_ttl", 0))
+    if cached_sources is not None:
+        results = _clone_sources(cached_sources)
+        if trace:
+            trace.add_step("search", details={"retrieved_count": len(results), "cache_hit": True})
+        logger.info(
+            "Hybrid search retrieval cache hit org_id=%s kb_count=%s top_k=%s expand_query=%s returned=%s",
+            org_id,
+            len(kb_ids),
+            top_k,
+            expand_query,
+            len(results),
+        )
+        return results
+
     logger.info(
         "Hybrid search start org_id=%s kb_count=%s top_k=%s expand_query=%s query_length=%s",
         org_id,
@@ -123,7 +234,7 @@ def hybrid_search(
 
     for q in queries:
         query_start = time.monotonic()
-        query_vector = embed_text(q)
+        query_vector = _embed_query(q)
         logger.debug(
             "Hybrid search embedding ready org_id=%s query_length=%s vector_dims=%s",
             org_id,
@@ -153,6 +264,11 @@ def hybrid_search(
                 all_results.append(_weaviate_to_source(obj, score))
 
     results = all_results[:top_k]
+    _retrieval_cache.set(
+        retrieval_cache_key,
+        _clone_sources(results),
+        getattr(settings, "retrieval_cache_ttl", 0),
+    )
     duration_ms = (time.monotonic() - t0) * 1000
     if trace:
         trace.add_step("search", duration_ms=duration_ms, details={"retrieved_count": len(results)})
@@ -168,7 +284,12 @@ def hybrid_search(
     return results
 
 
-def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = None, trace: object = None) -> list[RAGSource]:
+def rerank_sources(
+    query: str,
+    sources: list[RAGSource],
+    top_n: int | None = None,
+    trace: object = None,
+) -> list[RAGSource]:
     """Rerank sources using the configured reranker."""
     t0 = time.monotonic()
     if not sources:
@@ -185,7 +306,7 @@ def rerank_sources(query: str, sources: list[RAGSource], top_n: int | None = Non
         len(query or ""),
     )
 
-    documents = [s.content_preview for s in sources]
+    documents = [s.content for s in sources]
     results = reranker.rerank(query, documents)
 
     reranked = []
@@ -218,7 +339,7 @@ def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
             f"[{idx}] {source.document_title}"
             + (f" - {source.section_path}" if source.section_path else "")
             + (f" [{source.document_type}]" if source.document_type != "general" else "")
-            + f"\n{source.content_preview}\n"
+            + f"\n{source.content}\n"
         )
         citations.append(source.to_dict())
 
@@ -233,12 +354,33 @@ def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
     return context, citations
 
 
+def _build_history_aware_query(query: str, messages: list[dict]) -> str:
+    if not messages:
+        return query
+
+    history_parts = [
+        str(message.get("content", "")).strip()
+        for message in messages
+        if message.get("role") in {"system", "user", "assistant"} and str(message.get("content", "")).strip()
+    ]
+    if not history_parts:
+        return query
+
+    history_text = "\n".join(history_parts)
+    max_history_chars = 2000
+    if len(history_text) > max_history_chars:
+        history_text = history_text[-max_history_chars:]
+
+    return f"{history_text}\n当前问题：{query}"
+
+
 def assemble_context_and_generate(
     query: str,
     org_id: str,
     kb_ids: list[str],
     max_chunks: int = settings.rag_max_chunks,
     user_id: str = "",
+    messages: list[dict] | None = None,
 ):
     """Full RAG pipeline: query rewrite -> search -> rerank -> context -> stream generate.
     Yields (delta, is_done, sources) dicts.
@@ -261,10 +403,11 @@ def assemble_context_and_generate(
     trace = trace_collector.start_trace(trace_id, org_id, user_id or "anonymous", query, kb_ids)
 
     # Step 1: Hybrid search with optional query expansion
-    sources = hybrid_search(query, org_id, kb_ids, top_k=settings.rag_top_k, expand_query=True, trace=trace)
+    retrieval_query = _build_history_aware_query(query, messages or [])
+    sources = hybrid_search(retrieval_query, org_id, kb_ids, top_k=settings.rag_top_k, expand_query=True, trace=trace)
 
     # Step 2: Rerank
-    sources = rerank_sources(query, sources, trace=trace)
+    sources = rerank_sources(retrieval_query, sources, trace=trace)
 
     # Step 3: Truncate to max_chunks
     pre_truncate_count = len(sources)
@@ -309,7 +452,7 @@ def assemble_context_and_generate(
         len(sources),
         settings.llm_model,
     )
-    response = generate_stream(query=query, context=context)
+    response = generate_stream(query=query, context=context, messages=messages)
 
     accumulated = ""
     chunk_count = 0

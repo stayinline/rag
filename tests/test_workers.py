@@ -1,9 +1,21 @@
 """Tests for Celery workers and tasks."""
+import asyncio
 import os
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.workers.celery_app import celery_app
+
+
+def _clear_worker_async_context(tasks_module):
+    loop = getattr(tasks_module._worker_async_context, "loop", None)
+    if loop is not None:
+        if not loop.is_closed():
+            loop.close()
+        asyncio.set_event_loop(None)
+        delattr(tasks_module._worker_async_context, "loop")
 
 
 def test_celery_config():
@@ -11,6 +23,53 @@ def test_celery_config():
     assert celery_app.conf.accept_content == ["json"]
     assert celery_app.conf.result_serializer == "json"
     assert celery_app.conf.timezone == "Asia/Shanghai"
+
+
+def test_run_async_uses_thread_local_event_loops_for_concurrent_sync_calls():
+    from app.workers import tasks
+
+    async def capture_loop(caller_thread_id):
+        return {
+            "loop_id": id(asyncio.get_running_loop()),
+            "thread_id": threading.get_ident(),
+            "caller_thread_id": caller_thread_id,
+        }
+
+    barrier = threading.Barrier(2)
+
+    def run_one():
+        barrier.wait(timeout=5)
+        caller_thread_id = threading.get_ident()
+        try:
+            return tasks._run_async(capture_loop(caller_thread_id))
+        finally:
+            _clear_worker_async_context(tasks)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(run_one) for _ in range(2)]
+        results = [future.result(timeout=5) for future in futures]
+
+    assert len({result["loop_id"] for result in results}) == 2
+    assert len({result["thread_id"] for result in results}) == 2
+    assert all(result["thread_id"] == result["caller_thread_id"] for result in results)
+
+
+def test_run_async_propagates_coroutine_exception():
+    from app.workers import tasks
+
+    class WorkerAsyncError(RuntimeError):
+        pass
+
+    async def fail():
+        raise WorkerAsyncError("db update failed")
+
+    try:
+        tasks._run_async(fail())
+        assert False, "Should propagate the coroutine exception"
+    except WorkerAsyncError as exc:
+        assert str(exc) == "db update failed"
+    finally:
+        _clear_worker_async_context(tasks)
 
 
 def test_parse_document_task_success(tmp_path):

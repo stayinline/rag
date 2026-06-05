@@ -55,3 +55,24 @@ def test_generate_stream_with_messages():
         call_kwargs = mock_gen.call.call_args[1]
         # Messages should include system, user query, and additional messages
         assert len(call_kwargs["messages"]) >= 2
+
+
+def test_generate_stream_orders_history_before_current_query():
+    with patch("app.services.llm.Generation") as mock_gen, \
+         patch("app.services.llm.dashscope"):
+        mock_gen.call = MagicMock(return_value=iter([]))
+        messages = [
+            {"role": "user", "content": "previous question"},
+            {"role": "assistant", "content": "previous answer"},
+        ]
+
+        generate_stream(
+            query="current question",
+            context="context",
+            messages=messages,
+        )
+
+        sent_messages = mock_gen.call.call_args.kwargs["messages"]
+        assert sent_messages[0]["role"] == "system"
+        assert sent_messages[1:3] == messages
+        assert sent_messages[-1] == {"role": "user", "content": "current question"}

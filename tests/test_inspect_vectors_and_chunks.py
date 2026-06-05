@@ -308,10 +308,8 @@ class TestChunkSplitting:
 
     # ---- Overlap --------------------------------------------------------
 
-    def test_overlap_words_carried_to_next_chunk(self):
-        """Overlap is ~overlap//5 words (80//5 = 16 words).
-        Verify that the tail of chunk[n] reappears at the head of chunk[n+1].
-        """
+    def test_overlap_text_carried_to_next_chunk(self):
+        """Verify that the tail of chunk[n] reappears at the head of chunk[n+1]."""
         sentence = "alpha beta gamma delta epsilon zeta eta theta iota kappa "
         long_text = sentence * 60  # definitely > 600 tokens
         chunks = chunk_text(long_text, title="Overlap Test")
@@ -322,14 +320,32 @@ class TestChunkSplitting:
         head_words = chunks[1]["content"].split()[:8]   # first 8 words of chunk 1
         overlap_count = sum(1 for w in tail_words if w in head_words)
         assert overlap_count >= 4, (
-            f"Expected word-level overlap between consecutive chunks. "
+            f"Expected overlap between consecutive chunks. "
             f"Tail: {tail_words}\nHead: {head_words}"
         )
 
-    def test_overlap_word_count_is_approx_16(self):
-        """With overlap=80 tokens, overlap//5 = 16 words are kept."""
-        expected_overlap_words = 80 // 5
-        assert expected_overlap_words == 16
+    def test_overlap_count_is_token_budget(self):
+        """Overlap is configured directly in tokens, not as a derived word count."""
+        with patch("app.services.chunker.settings") as mock_settings:
+            mock_settings.rag_chunk_size = 20
+            mock_settings.rag_chunk_overlap = 6
+            chunks = chunk_text(
+                " ".join(f"term{i}" for i in range(60)),
+                title="Overlap",
+            )
+
+        assert len(chunks) > 1
+        assert count_tokens(chunks[0]["content"]) <= 20
+        assert count_tokens(chunks[1]["content"]) <= 20
+        first_words = chunks[0]["content"].split()
+        second_words = chunks[1]["content"].split()
+        common_overlap = []
+        for size in range(min(len(first_words), len(second_words)), 0, -1):
+            if first_words[-size:] == second_words[:size]:
+                common_overlap = first_words[-size:]
+                break
+        assert common_overlap
+        assert count_tokens(" ".join(common_overlap)) <= 6
 
     # ---- Section path ---------------------------------------------------
 
