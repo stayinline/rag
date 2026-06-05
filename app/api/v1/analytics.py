@@ -29,6 +29,7 @@ from app.schemas.analytics import (
     AuditLogListResponse,
     AuditLogResponse,
 )
+from app.services.clickhouse import EMPTY_ANALYTICS_SUMMARY
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +396,7 @@ async def get_analytics_summary(
     from app.services.clickhouse import clickhouse_client
     summary = await clickhouse_client.get_analytics_summary(org_id)
     logger.info("Get analytics summary complete org_id=%s user_id=%s keys=%s", org_id, user["user_id"], list(summary.keys()))
-    return RAGAnalyticsSummary(**summary)
+    return RAGAnalyticsSummary(**{**EMPTY_ANALYTICS_SUMMARY, **(summary or {})})
 
 
 # --- RAG Trace Details ---

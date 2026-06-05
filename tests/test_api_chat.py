@@ -57,6 +57,42 @@ def test_chat_non_stream(test_client):
     assert data["model"] == "configured-chat-model"
 
 
+def test_chat_non_stream_ignores_trace_detail_save_failure(test_client):
+    trace_id = str(uuid.uuid4())
+    added_objects = []
+
+    def capture_added_object(obj):
+        added_objects.append(obj)
+
+    async def expire_added_object_ids():
+        for obj in added_objects:
+            if hasattr(obj, "id"):
+                obj.id = None
+
+    test_client.mock_session.add.side_effect = capture_added_object
+    test_client.mock_session.rollback.side_effect = expire_added_object_ids
+
+    with patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen, \
+         patch("app.services.rag_trace_store.save_rag_trace_detail") as mock_save:
+        mock_gen.return_value = iter([
+            {"delta": "Answer", "done": False, "trace_id": trace_id, "sources": []},
+            {"delta": "", "done": True, "trace_id": trace_id, "sources": []},
+        ])
+        mock_save.side_effect = RuntimeError("trace table missing")
+
+        resp = test_client.post(
+            "/api/v1/chat",
+            json={"query": "What is RAG?", "stream": False},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["trace_id"] == trace_id
+    assert data["conversation_id"] not in (None, "", "None")
+    assert data["message_id"] not in (None, "", "None")
+    assert test_client.mock_session.rollback.await_count >= 1
+
+
 def test_chat_with_kb_ids(test_client):
     kb_id = str(uuid.uuid4())
     with patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen:

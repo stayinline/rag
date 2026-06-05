@@ -2,6 +2,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from app.config import settings
 from app.models.base import Base
 
 # Import all models to register them
@@ -14,6 +15,7 @@ from app.models.conversation import Conversation, ConversationMessage  # noqa
 from app.models.rag_trace import RAGTraceDetail  # noqa
 
 config = context.config
+config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
 
 

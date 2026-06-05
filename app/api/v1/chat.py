@@ -370,35 +370,52 @@ async def _persist_chat_turn(
     conversation.message_count = next_sequence_value + 2
     conversation.last_message_at = now
 
-    if trace_id:
-        from app.services.rag_trace import trace_collector
-        from app.services.rag_trace_store import save_rag_trace_detail
-
-        await save_rag_trace_detail(
-            db,
-            trace=trace_collector.get_trace(trace_id),
-            org_id=str(user["org_id"]),
-            user_id=str(user["user_id"]),
-            conversation_id=conversation.id,
-            message_id=assistant_message.id,
-        )
-
     await db.commit()
     await db.refresh(conversation)
     await db.refresh(assistant_message)
+
+    conversation_id_value = conversation.id
+    user_message_id_value = user_message.id
+    assistant_message_id_value = assistant_message.id
+    answer_length = len(answer or "")
+    source_count = len(sources or [])
+
+    if trace_id:
+        try:
+            from app.services.rag_trace import trace_collector
+            from app.services.rag_trace_store import save_rag_trace_detail
+
+            await save_rag_trace_detail(
+                db,
+                trace=trace_collector.get_trace(trace_id),
+                org_id=str(user["org_id"]),
+                user_id=str(user["user_id"]),
+                conversation_id=conversation_id_value,
+                message_id=assistant_message_id_value,
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.warning(
+                "RAG trace detail save failed but chat turn was persisted org_id=%s user_id=%s trace_id=%s",
+                user["org_id"],
+                user["user_id"],
+                trace_id,
+                exc_info=True,
+            )
     logger.info(
         "Chat turn persisted org_id=%s user_id=%s conversation_id=%s user_message_id=%s assistant_message_id=%s "
         "trace_id=%s answer_length=%s source_count=%s",
         user["org_id"],
         user["user_id"],
-        conversation.id,
-        user_message.id,
-        assistant_message.id,
+        conversation_id_value,
+        user_message_id_value,
+        assistant_message_id_value,
         trace_id,
-        len(answer or ""),
-        len(sources or []),
+        answer_length,
+        source_count,
     )
-    return conversation.id, assistant_message.id
+    return conversation_id_value, assistant_message_id_value
 
 
 def _make_conversation_title(query: str) -> str:
