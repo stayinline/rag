@@ -1,10 +1,12 @@
 """RAG trace service for capturing the full RAG pipeline execution."""
 import hashlib
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 @dataclass
@@ -53,6 +55,23 @@ class RAGTrace:
         """Generate a hash of the query for deduplication."""
         return hashlib.md5(f"{self.org_id}:{self.query}".encode()).hexdigest()[:16]
 
+    def _clickhouse_user_id(self) -> str:
+        try:
+            uuid.UUID(str(self.user_id))
+        except (TypeError, ValueError):
+            return ZERO_UUID
+        return str(self.user_id)
+
+    def _clickhouse_kb_ids(self) -> list[str]:
+        kb_ids = []
+        for kb_id in self.kb_ids:
+            try:
+                uuid.UUID(str(kb_id))
+            except (TypeError, ValueError):
+                continue
+            kb_ids.append(str(kb_id))
+        return kb_ids
+
     def get_retrieved_count(self) -> int:
         """Get total retrieved count from search step."""
         for s in self.steps:
@@ -87,10 +106,10 @@ class RAGTrace:
         return RAGTraceEvent(
             trace_id=self.trace_id,
             org_id=self.org_id,
-            user_id=self.user_id,
+            user_id=self._clickhouse_user_id(),
             query_hash=self.get_query_hash(),
             query_text=self.query[:2000],  # Truncate long queries
-            kb_ids=self.kb_ids,
+            kb_ids=self._clickhouse_kb_ids(),
             rewrite_count=self.get_rewrite_count(),
             retrieved_count=self.get_retrieved_count(),
             reranked_count=self.get_reranked_count(),

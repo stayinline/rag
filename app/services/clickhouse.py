@@ -141,10 +141,10 @@ class ClickHouseClient:
             import httpx
             logger.debug("ClickHouse write retrieval hit start trace_id=%s chunk_id=%s", event.trace_id, event.chunk_id)
             values = (
-                f"now(), '{event.trace_id}', '{event.org_id}', '{event.query_hash}', "
-                f"'{event.chunk_id}', '{event.document_id}', {event.rank_before}, "
-                f"{event.rank_after}, {event.vector_score}, {event.bm25_score}, "
-                f"{event.rerank_score}, {event.clicked}, {event.cited}"
+                f"now(), '{_escape(event.trace_id)}', '{_escape(event.org_id)}', '{_escape(event.query_hash)}', "
+                f"'{_escape(event.chunk_id)}', '{_escape(event.document_id)}', {max(int(event.rank_before or 0), 0)}, "
+                f"{max(int(event.rank_after or 0), 0)}, {_safe_float(event.vector_score)}, {_safe_float(event.bm25_score)}, "
+                f"{_safe_float(event.rerank_score)}, {_clickhouse_bool(event.clicked)}, {_clickhouse_bool(event.cited)}"
             )
             query = (
                 "INSERT INTO retrieval_hit_events "
@@ -172,6 +172,51 @@ class ClickHouseClient:
                 return ok
         except Exception as e:
             logger.warning("Failed to write retrieval hit to ClickHouse: %s", e)
+            return False
+
+    async def write_retrieval_hits(self, events: list[RetrievalHitEvent]) -> bool:
+        """Write retrieval hit events to ClickHouse in one request."""
+        if not events:
+            return True
+        try:
+            import httpx
+            logger.debug("ClickHouse write retrieval hits start count=%s", len(events))
+            rows = []
+            for event in events:
+                rows.append(
+                    "("
+                    f"now(), '{_escape(event.trace_id)}', '{_escape(event.org_id)}', '{_escape(event.query_hash)}', "
+                    f"'{_escape(event.chunk_id)}', '{_escape(event.document_id)}', "
+                    f"{max(int(event.rank_before or 0), 0)}, {max(int(event.rank_after or 0), 0)}, "
+                    f"{_safe_float(event.vector_score)}, {_safe_float(event.bm25_score)}, "
+                    f"{_safe_float(event.rerank_score)}, {_clickhouse_bool(event.clicked)}, {_clickhouse_bool(event.cited)}"
+                    ")"
+                )
+            query = (
+                "INSERT INTO retrieval_hit_events "
+                "(event_time, trace_id, org_id, query_hash, chunk_id, document_id, "
+                "rank_before, rank_after, vector_score, bm25_score, rerank_score, clicked, cited) "
+                f"VALUES {', '.join(rows)}"
+            )
+
+            async with httpx.AsyncClient(timeout=10, auth=self._auth) as client:
+                resp = await client.post(
+                    self.url,
+                    params=self._params(query),
+                )
+                ok = resp.status_code == 200
+                if ok:
+                    logger.debug("ClickHouse write retrieval hits complete count=%s", len(events))
+                else:
+                    logger.warning(
+                        "ClickHouse write retrieval hits returned non-200 count=%s status_code=%s body_preview=%s",
+                        len(events),
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                return ok
+        except Exception as e:
+            logger.warning("Failed to write retrieval hits to ClickHouse: %s", e)
             return False
 
     async def update_trace_rating(self, org_id: str, trace_id: str, rating: int) -> bool:
@@ -326,6 +371,10 @@ def _safe_float(value) -> float:
 
 def _safe_int(value) -> int:
     return int(_safe_float(value))
+
+
+def _clickhouse_bool(value: bool) -> int:
+    return 1 if value else 0
 
 
 # Global client instance

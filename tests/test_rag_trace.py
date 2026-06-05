@@ -1,4 +1,5 @@
 """Tests for RAG trace service."""
+import uuid
 
 from app.services.rag_trace import (
     TraceStep,
@@ -94,6 +95,21 @@ class TestRAGTrace:
         assert event.reranked_count == 5
         assert event.source_count == 4
         assert event.model == "qwen-plus"
+
+    def test_to_clickhouse_event_uses_zero_uuid_for_non_uuid_user(self):
+        trace = RAGTrace(trace_id="t1", org_id="o1", user_id="anonymous", query="q")
+
+        event = trace.to_clickhouse_event()
+
+        assert event.user_id == "00000000-0000-0000-0000-000000000000"
+
+    def test_to_clickhouse_event_filters_non_uuid_kb_ids(self):
+        kb_id = str(uuid.uuid4())
+        trace = RAGTrace(trace_id="t1", org_id="o1", user_id=str(uuid.uuid4()), query="q", kb_ids=[kb_id, "kb-1"])
+
+        event = trace.to_clickhouse_event()
+
+        assert event.kb_ids == [kb_id]
 
 
 class TestTraceCollector:

@@ -14,6 +14,13 @@ def test_default_settings():
     assert settings.rag_max_chunks == 8
     assert settings.rag_chunk_size == 600
     assert settings.rag_top_k == 20
+    assert settings.llm_context_window_tokens == 8192
+    assert settings.llm_max_output_tokens == 2048
+    assert settings.rag_context_safety_margin_tokens == 512
+    assert settings.rag_parent_context_window == 1
+    assert settings.contextual_compression is True
+    assert settings.contextual_compression_max_sentences == 3
+    assert settings.llm_query_rewrite is False
 
 
 def test_project_config_values_are_loaded():
@@ -39,11 +46,19 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     monkeypatch.setenv("SECRET_KEY", "test")
     monkeypatch.setenv("RAG_TOP_K", "50")
+    monkeypatch.setenv("LLM_CONTEXT_WINDOW_TOKENS", "32768")
+    monkeypatch.setenv("RAG_PARENT_CONTEXT_WINDOW", "2")
+    monkeypatch.setenv("CONTEXTUAL_COMPRESSION", "false")
+    monkeypatch.setenv("LLM_QUERY_REWRITE", "true")
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./env.db")
 
     settings = Settings()
     assert settings.llm_model == "qwen-max"
     assert settings.rag_top_k == 50
+    assert settings.llm_context_window_tokens == 32768
+    assert settings.rag_parent_context_window == 2
+    assert settings.contextual_compression is False
+    assert settings.llm_query_rewrite is True
     assert settings.dashscope_api_key == "test-key"
     assert settings.database_url == "sqlite+aiosqlite:///./env.db"
 

@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     )
     rerank_model_name: str = _field(_root("RERANK_MODEL_NAME", ""), "RERANK_MODEL_NAME")
     summary_model: str = _field(_root("SUMMARY_MODEL", "qwen-turbo"), "SUMMARY_MODEL")
+    llm_context_window_tokens: int = _field(
+        _root("LLM_CONTEXT_WINDOW_TOKENS", 8192),
+        "LLM_CONTEXT_WINDOW_TOKENS",
+    )
+    llm_max_output_tokens: int = _field(_root("LLM_MAX_OUTPUT_TOKENS", 2048), "LLM_MAX_OUTPUT_TOKENS")
 
     # File storage
     storage_path: str = _field("./data/files", "STORAGE_PATH")
@@ -139,6 +144,16 @@ class Settings(BaseSettings):
     rag_chunk_overlap: int = _field(80, "RAG_CHUNK_OVERLAP")
     rag_chunk_size: int = _field(600, "RAG_CHUNK_SIZE")
     rag_top_k: int = _field(20, "RAG_TOP_K")
+    rag_context_safety_margin_tokens: int = _field(
+        _root("RAG_CONTEXT_SAFETY_MARGIN_TOKENS", 512),
+        "RAG_CONTEXT_SAFETY_MARGIN_TOKENS",
+    )
+    rag_parent_context_window: int = _field(_root("RAG_PARENT_CONTEXT_WINDOW", 1), "RAG_PARENT_CONTEXT_WINDOW")
+    contextual_compression: bool = _field(_root("CONTEXTUAL_COMPRESSION", True), "CONTEXTUAL_COMPRESSION")
+    contextual_compression_max_sentences: int = _field(
+        _root("CONTEXTUAL_COMPRESSION_MAX_SENTENCES", 3),
+        "CONTEXTUAL_COMPRESSION_MAX_SENTENCES",
+    )
 
     # Celery
     celery_broker_url: str = _field(_root("REDIS_DSN", "redis://localhost:6379/1"), "CELERY_BROKER_URL")
@@ -149,6 +164,9 @@ class Settings(BaseSettings):
     reranker_type: str = _field("bm25", "RERANKER_TYPE")  # bm25, mock, or bge
     reranker_top_n: int = _field(10, "RERANKER_TOP_N")  # Number of candidates after reranking
     query_expansion: bool = _field(True, "QUERY_EXPANSION")  # Enable medical term expansion
+    llm_query_rewrite: bool = _field(_root("LLM_QUERY_REWRITE", False), "LLM_QUERY_REWRITE")
+    llm_query_rewrite_model: str = _field(_root("LLM_QUERY_REWRITE_MODEL", ""), "LLM_QUERY_REWRITE_MODEL")
+    citation_min_score: float = _field(_root("CITATION_MIN_SCORE", 0.0), "CITATION_MIN_SCORE")
 
     # Phase 3: Analytics & Quality
     clickhouse_url: str = _field(_clickhouse_url(), "CLICKHOUSE_URL")

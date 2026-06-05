@@ -22,6 +22,9 @@ def test_chunk_simple_text():
     assert len(chunks) >= 1
     assert "content" in chunks[0]
     assert "section_path" in chunks[0]
+    assert chunks[0]["chunk_index"] == 0
+    assert chunks[0]["parent_chunk_id"]
+    assert chunks[0]["child_chunk_ids"] == []
 
 
 def test_chunk_with_headings():

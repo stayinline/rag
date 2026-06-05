@@ -122,6 +122,27 @@ class TestClickHouseClient:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_write_retrieval_hits_batch(self):
+        mock_client = _make_async_context_mock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        client = ClickHouseClient(url="http://localhost:8123")
+        events = [
+            RetrievalHitEvent(trace_id="t1", org_id="o1", chunk_id="c1", document_id="d1", rank_after=1),
+            RetrievalHitEvent(trace_id="t1", org_id="o1", chunk_id="c2", document_id="d2", rank_after=2),
+        ]
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await client.write_retrieval_hits(events)
+
+        assert result is True
+        query = mock_client.post.call_args.kwargs["params"]["query"]
+        assert "INSERT INTO retrieval_hit_events" in query
+        assert query.count("now()") == 2
+
+    @pytest.mark.asyncio
     async def test_get_zero_result_queries(self):
         """Test getting zero-result queries."""
         mock_client = _make_async_context_mock()

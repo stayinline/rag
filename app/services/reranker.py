@@ -2,6 +2,7 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from http import HTTPStatus
 
 from app.config import settings
 
@@ -102,6 +103,67 @@ class BM25Reranker(BaseReranker):
         return results
 
 
+class BGEReranker(BaseReranker):
+    """DashScope text reranker backend for BGE-compatible rerank models."""
+
+    def __init__(self, model: str | None = None, top_n: int | None = None):
+        self.model = getattr(settings, "rerank_model_name", "") if model is None else model
+        self.top_n = top_n
+
+    def rerank(self, query: str, documents: list[str]) -> list[RerankerResult]:
+        if not documents:
+            return []
+        if not self.model:
+            raise ValueError("RERANK_MODEL_NAME is required when RERANKER_TYPE=bge")
+
+        from dashscope import TextReRank
+
+        t0 = time.monotonic()
+        logger.debug(
+            "BGE rerank start model=%s query_length=%s document_count=%s top_n=%s",
+            self.model,
+            len(query or ""),
+            len(documents),
+            self.top_n,
+        )
+        response = TextReRank.call(
+            model=self.model,
+            query=query,
+            documents=documents,
+            top_n=self.top_n,
+            api_key=getattr(settings, "dashscope_api_key", "") or None,
+        )
+        status_code = getattr(response, "status_code", None)
+        if status_code != HTTPStatus.OK:
+            message = getattr(response, "message", "") or getattr(response, "code", "") or "unknown error"
+            raise RuntimeError(f"BGE rerank failed status={status_code}: {message}")
+
+        output = getattr(response, "output", None)
+        raw_results = getattr(output, "results", None) if output is not None else None
+        results = [
+            RerankerResult(
+                index=int(_get_result_value(item, "index")),
+                score=float(_get_result_value(item, "relevance_score")),
+            )
+            for item in (raw_results or [])
+        ]
+        results.sort(key=lambda r: r.score, reverse=True)
+        logger.debug(
+            "BGE rerank complete model=%s document_count=%s returned=%s duration_ms=%.2f",
+            self.model,
+            len(documents),
+            len(results),
+            (time.monotonic() - t0) * 1000,
+        )
+        return results
+
+
+def _get_result_value(result, key: str):
+    if isinstance(result, dict):
+        return result[key]
+    return getattr(result, key)
+
+
 def get_reranker() -> BaseReranker:
     """Get configured reranker instance."""
     reranker_type = getattr(settings, "reranker_type", "bm25")
@@ -110,6 +172,8 @@ def get_reranker() -> BaseReranker:
         return MockReranker()
     elif reranker_type == "bm25":
         return BM25Reranker()
+    elif reranker_type == "bge":
+        return BGEReranker(top_n=getattr(settings, "reranker_top_n", None))
     else:
         logger.warning("Unknown reranker type '%s', falling back to BM25", reranker_type)
         return BM25Reranker()

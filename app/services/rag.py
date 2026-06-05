@@ -4,16 +4,21 @@ import logging
 import threading
 from typing import Any
 
+import tiktoken
 from app.config import settings
 from app.logging_config import format_log_text
+from app.services.chunker import count_tokens
+from app.services.citation_validator import validate_answer_citations
+from app.services.contextual_compression import compress_sources_for_query
 from app.services.embedding import embed_text
 from app.services.llm import generate_stream
 from app.services.weaviate_client import COLLECTION_NAME, get_client
 from weaviate.classes.query import Filter, MetadataQuery
-from app.services.query_rewriter import rewrite_query
+from app.services.query_rewriter import ConversationalQueryRewriteResult, rewrite_conversational_query, rewrite_query
 from app.services.reranker import get_reranker
 
 logger = logging.getLogger(__name__)
+_TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
 class _TTLCache:
@@ -54,10 +59,16 @@ class RAGSource:
     def __init__(self, chunk_id: str, document_id: str, document_title: str,
                  section_path: str | None, page_start: int | None, page_end: int | None,
                  score: float, content_preview: str,
-                 document_type: str = "general", section_type: str | None = None):
+                 document_type: str = "general", section_type: str | None = None,
+                 chunk_index: int | None = None, parent_chunk_id: str | None = None,
+                 kb_id: str = "", child_chunk_ids: list[str] | None = None,
+                 rank_before: int = 0, rank_after: int = 0,
+                 vector_score: float = 0.0, bm25_score: float = 0.0,
+                 rerank_score: float = 0.0):
         content = content_preview or ""
         self.chunk_id = chunk_id
         self.document_id = document_id
+        self.kb_id = kb_id
         self.document_title = document_title
         self.section_path = section_path
         self.page_start = page_start
@@ -67,6 +78,14 @@ class RAGSource:
         self.content_preview = content[:300]
         self.document_type = document_type
         self.section_type = section_type
+        self.chunk_index = chunk_index
+        self.parent_chunk_id = parent_chunk_id
+        self.child_chunk_ids = list(child_chunk_ids or [])
+        self.rank_before = rank_before
+        self.rank_after = rank_after
+        self.vector_score = vector_score
+        self.bm25_score = bm25_score
+        self.rerank_score = rerank_score
 
     def clone(self) -> "RAGSource":
         return RAGSource(
@@ -80,12 +99,22 @@ class RAGSource:
             content_preview=self.content,
             document_type=self.document_type,
             section_type=self.section_type,
+            chunk_index=self.chunk_index,
+            parent_chunk_id=self.parent_chunk_id,
+            kb_id=self.kb_id,
+            child_chunk_ids=self.child_chunk_ids,
+            rank_before=self.rank_before,
+            rank_after=self.rank_after,
+            vector_score=self.vector_score,
+            bm25_score=self.bm25_score,
+            rerank_score=self.rerank_score,
         )
 
     def to_dict(self) -> dict:
         return {
             "chunk_id": self.chunk_id,
             "document_id": self.document_id,
+            "kb_id": self.kb_id,
             "document_title": self.document_title,
             "section_path": self.section_path,
             "page_start": self.page_start,
@@ -94,6 +123,14 @@ class RAGSource:
             "content_preview": self.content_preview,
             "document_type": self.document_type,
             "section_type": self.section_type,
+            "chunk_index": self.chunk_index,
+            "parent_chunk_id": self.parent_chunk_id,
+            "child_chunk_ids": self.child_chunk_ids,
+            "rank_before": self.rank_before,
+            "rank_after": self.rank_after,
+            "vector_score": self.vector_score,
+            "bm25_score": self.bm25_score,
+            "rerank_score": self.rerank_score,
         }
 
 
@@ -128,6 +165,14 @@ def _retrieval_cache_key(
     )
 
 
+def _effective_context_budget_tokens() -> int:
+    context_window = int(getattr(settings, "llm_context_window_tokens", 8192) or 8192)
+    output_budget = int(getattr(settings, "llm_max_output_tokens", 2048) or 2048)
+    safety_margin = int(getattr(settings, "rag_context_safety_margin_tokens", 512) or 512)
+    budget = context_window - output_budget - safety_margin
+    return max(budget, int(getattr(settings, "rag_chunk_size", 600) or 600))
+
+
 def _embed_query(query: str) -> tuple[list[float], bool, float]:
     t0 = time.monotonic()
     cache_key = _query_cache_key(query)
@@ -160,6 +205,7 @@ def _weaviate_to_source(obj, score: float) -> RAGSource:
     return RAGSource(
         chunk_id=str(obj.uuid),
         document_id=props.get("document_id", ""),
+        kb_id=props.get("kb_id", ""),
         document_title=props.get("title", ""),
         section_path=props.get("section_path"),
         page_start=props.get("page_start"),
@@ -167,7 +213,12 @@ def _weaviate_to_source(obj, score: float) -> RAGSource:
         score=score,
         content_preview=props.get("content", ""),
         document_type=props.get("document_type", "general"),
-        section_type=None,
+        section_type=props.get("section_type"),
+        chunk_index=props.get("chunk_index"),
+        parent_chunk_id=props.get("parent_chunk_id"),
+        child_chunk_ids=props.get("child_chunk_ids") or [],
+        vector_score=score,
+        rerank_score=score,
     )
 
 
@@ -186,10 +237,28 @@ def _score_for_log(score: Any) -> float:
         return 0.0
 
 
+def _safe_score(score: Any) -> float:
+    try:
+        return float(score or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_uuid_like(value: Any) -> bool:
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _summarize_source(source: RAGSource, preview_chars: int = 120) -> dict:
     return {
         "chunk_id": source.chunk_id,
         "document_id": source.document_id,
+        "kb_id": source.kb_id,
         "title": format_log_text(source.document_title, 80),
         "section_path": format_log_text(source.section_path, 120),
         "page_start": source.page_start,
@@ -396,6 +465,203 @@ def hybrid_search(
     return results
 
 
+def retrieve_sources(
+    query: str,
+    org_id: str,
+    kb_ids: list[str],
+    top_k: int = settings.rag_top_k,
+    expand_query: bool = True,
+    top_n: int | None = None,
+    trace: object = None,
+) -> list[RAGSource]:
+    """Run the shared retrieval path: optional expansion -> hybrid search -> rerank."""
+    retrieval_top_k = max(top_k, int(getattr(settings, "rag_top_k", top_k) or top_k))
+    sources = hybrid_search(
+        query=query,
+        org_id=org_id,
+        kb_ids=kb_ids,
+        top_k=retrieval_top_k,
+        expand_query=expand_query,
+        trace=trace,
+    )
+    for idx, source in enumerate(sources, start=1):
+        source.rank_before = idx
+        source.vector_score = source.score
+    reranked = rerank_sources(query, sources, top_n=top_n or top_k, trace=trace)
+    for idx, source in enumerate(reranked, start=1):
+        source.rank_after = idx
+        source.rerank_score = source.score
+    expanded = expand_parent_child_context(reranked, trace=trace)
+    _write_retrieval_hits_to_clickhouse(trace, expanded)
+    return expanded
+
+
+def expand_parent_child_context(sources: list[RAGSource], trace: object = None) -> list[RAGSource]:
+    """Attach adjacent chunk previews from PostgreSQL chunk metadata to each source."""
+    window = int(getattr(settings, "rag_parent_context_window", 1) or 0)
+    if window <= 0 or not sources:
+        return sources
+
+    try:
+        import asyncio
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.chunk import DocumentChunk
+
+        async def _load_neighbors() -> dict[str, list[DocumentChunk]]:
+            result: dict[str, list[DocumentChunk]] = {}
+            async with async_session() as session:
+                for source in sources:
+                    if source.chunk_index is None:
+                        continue
+                    try:
+                        document_id = uuid.UUID(str(source.document_id))
+                    except ValueError:
+                        continue
+                    stmt = (
+                        select(DocumentChunk)
+                        .where(
+                            DocumentChunk.document_id == document_id,
+                            DocumentChunk.chunk_index >= max(int(source.chunk_index) - window, 0),
+                            DocumentChunk.chunk_index <= int(source.chunk_index) + window,
+                        )
+                        .order_by(DocumentChunk.chunk_index.asc())
+                    )
+                    rows = (await session.execute(stmt)).scalars().all()
+                    result[source.chunk_id] = list(rows)
+            return result
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            neighbors_by_chunk = asyncio.run(_load_neighbors())
+        else:
+            neighbors_by_chunk = _run_async_in_thread(_load_neighbors)
+
+        expanded_count = 0
+        for source in sources:
+            neighbors = neighbors_by_chunk.get(source.chunk_id, [])
+            if len(neighbors) <= 1:
+                continue
+            parts = []
+            seen = set()
+            for row in neighbors:
+                text = str(getattr(row, "content_preview", "") or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                marker = "当前块" if str(getattr(row, "weaviate_id", "")) == source.chunk_id else f"相邻块 {row.chunk_index}"
+                parts.append(f"{marker}: {text}")
+            if parts:
+                source.content = "\n".join(parts)
+                expanded_count += 1
+        if trace:
+            trace.add_step(
+                "parent_child_context",
+                details={
+                    "window": window,
+                    "input_count": len(sources),
+                    "expanded_count": expanded_count,
+                },
+            )
+        return sources
+    except Exception as exc:
+        logger.warning("Parent-child context expansion failed: %s", exc, exc_info=True)
+        return sources
+
+
+def _run_async_in_thread(async_factory):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(async_factory())).result()
+
+
+def _write_retrieval_hits_to_clickhouse(trace: object, sources: list[RAGSource]) -> None:
+    if not trace or not getattr(settings, "enable_trace_logging", True):
+        return
+
+    trace_id = str(getattr(trace, "trace_id", "") or "")
+    org_id = str(getattr(trace, "org_id", "") or "")
+    if not trace_id or not _is_uuid_like(org_id):
+        return
+
+    query_hash = ""
+    get_query_hash = getattr(trace, "get_query_hash", None)
+    if callable(get_query_hash):
+        query_hash = str(get_query_hash())
+
+    events = []
+    for idx, source in enumerate(sources, start=1):
+        chunk_id = str(source.chunk_id or "")
+        document_id = str(source.document_id or "")
+        if not (_is_uuid_like(chunk_id) and _is_uuid_like(document_id)):
+            continue
+        rank_after = source.rank_after or idx
+        events.append(
+            _make_retrieval_hit_event(
+                trace_id=trace_id,
+                org_id=org_id,
+                query_hash=query_hash,
+                source=source,
+                rank_after=rank_after,
+            )
+        )
+    if not events:
+        return
+
+    try:
+        import asyncio
+
+        from app.services.clickhouse import clickhouse_client
+
+        def async_factory():
+            return clickhouse_client.write_retrieval_hits(events)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            ok = asyncio.run(async_factory())
+        else:
+            ok = _run_async_in_thread(async_factory)
+        if trace:
+            trace.add_step(
+                "retrieval_hit_events",
+                details={
+                    "attempted_count": len(events),
+                    "written": bool(ok),
+                },
+            )
+    except Exception as exc:
+        logger.warning("Failed to write retrieval hit events to ClickHouse: %s", exc)
+
+
+def _make_retrieval_hit_event(
+    *,
+    trace_id: str,
+    org_id: str,
+    query_hash: str,
+    source: RAGSource,
+    rank_after: int,
+):
+    from app.services.clickhouse import RetrievalHitEvent
+
+    return RetrievalHitEvent(
+        trace_id=trace_id,
+        org_id=org_id,
+        query_hash=query_hash,
+        chunk_id=str(source.chunk_id),
+        document_id=str(source.document_id),
+        rank_before=max(int(source.rank_before or 0), 0),
+        rank_after=max(int(rank_after or 0), 0),
+        vector_score=_safe_score(source.vector_score),
+        bm25_score=_safe_score(source.bm25_score),
+        rerank_score=_safe_score(source.rerank_score or source.score),
+    )
+
+
 def rerank_sources(
     query: str,
     sources: list[RAGSource],
@@ -429,10 +695,35 @@ def rerank_sources(
     )
 
     documents = [s.content for s in sources]
-    results = reranker.rerank(query, documents)
+    try:
+        results = reranker.rerank(query, documents)
+    except Exception as exc:
+        logger.warning(
+            "Rerank failed; preserving hybrid order reranker=%s input_count=%s error=%s",
+            reranker.__class__.__name__,
+            len(sources),
+            exc,
+            exc_info=True,
+        )
+        if trace:
+            trace.add_step(
+                "rerank",
+                duration_ms=(time.monotonic() - t0) * 1000,
+                details={
+                    "reranker": reranker.__class__.__name__,
+                    "input_count": len(sources),
+                    "reranked_count": min(len(sources), top_n),
+                    "fallback": True,
+                    "error": str(exc)[:500],
+                },
+            )
+        return sources[:top_n]
 
     reranked = []
     for r in results[:top_n]:
+        if r.index < 0 or r.index >= len(sources):
+            logger.warning("Rerank result index out of range index=%s source_count=%s", r.index, len(sources))
+            continue
         source = sources[r.index]
         source.score = r.score
         reranked.append(source)
@@ -460,27 +751,68 @@ def rerank_sources(
     return reranked
 
 
-def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
+def build_context(
+    sources: list[RAGSource],
+    max_tokens: int | None = None,
+    trace: object = None,
+) -> tuple[str, list[dict]]:
     """Build context string from sources and return citation info."""
     t0 = time.monotonic()
+    max_tokens = max_tokens or _effective_context_budget_tokens()
     context_parts = []
     citations = []
+    used_tokens = 0
+    skipped_count = 0
 
-    for idx, source in enumerate(sources, 1):
-        context_parts.append(
-            f"[{idx}] {source.document_title}"
+    for source in sources:
+        next_idx = len(citations) + 1
+        part = (
+            f"[{next_idx}] {source.document_title}"
             + (f" - {source.section_path}" if source.section_path else "")
             + (f" [{source.document_type}]" if source.document_type != "general" else "")
             + f"\n{source.content}\n"
         )
+        part_tokens = count_tokens(part)
+        if citations and used_tokens + part_tokens > max_tokens:
+            skipped_count += 1
+            continue
+        if not citations and part_tokens > max_tokens:
+            part = _trim_context_part(
+                prefix=(
+                    f"[{next_idx}] {source.document_title}"
+                    + (f" - {source.section_path}" if source.section_path else "")
+                    + (f" [{source.document_type}]" if source.document_type != "general" else "")
+                    + "\n"
+                ),
+                content=source.content,
+                max_tokens=max_tokens,
+            )
+            part_tokens = count_tokens(part)
+        context_parts.append(part)
+        used_tokens += part_tokens
         citations.append(source.to_dict())
 
     context = "\n---\n".join(context_parts)
+    if trace:
+        trace.add_step(
+            "context_budget",
+            details={
+                "max_tokens": max_tokens,
+                "used_tokens": count_tokens(context),
+                "input_sources": len(sources),
+                "selected_sources": len(citations),
+                "skipped_sources": skipped_count,
+            },
+        )
     logger.info(
-        "Build context complete source_count=%s citation_count=%s context_length=%s duration_ms=%.2f citations=%s",
+        "Build context complete source_count=%s citation_count=%s context_length=%s context_tokens=%s "
+        "max_tokens=%s skipped_sources=%s duration_ms=%.2f citations=%s",
         len(sources),
         len(citations),
         len(context),
+        count_tokens(context),
+        max_tokens,
+        skipped_count,
         (time.monotonic() - t0) * 1000,
         [
             {
@@ -496,24 +828,22 @@ def build_context(sources: list[RAGSource]) -> tuple[str, list[dict]]:
     return context, citations
 
 
+def _trim_context_part(prefix: str, content: str, max_tokens: int) -> str:
+    suffix = "\n"
+    allowed_content_tokens = max(max_tokens - count_tokens(prefix) - count_tokens(suffix), 0)
+    if allowed_content_tokens <= 0:
+        return prefix.rstrip()
+    encoded = _TOKEN_ENCODER.encode(content or "")
+    trimmed_content = _TOKEN_ENCODER.decode(encoded[:allowed_content_tokens])
+    return f"{prefix}{trimmed_content}{suffix}"
+
+
 def _build_history_aware_query(query: str, messages: list[dict]) -> str:
-    if not messages:
-        return query
+    return _rewrite_history_aware_query(query, messages).rewritten
 
-    history_parts = [
-        str(message.get("content", "")).strip()
-        for message in messages
-        if message.get("role") in {"system", "user", "assistant"} and str(message.get("content", "")).strip()
-    ]
-    if not history_parts:
-        return query
 
-    history_text = "\n".join(history_parts)
-    max_history_chars = 2000
-    if len(history_text) > max_history_chars:
-        history_text = history_text[-max_history_chars:]
-
-    return f"{history_text}\n当前问题：{query}"
+def _rewrite_history_aware_query(query: str, messages: list[dict]) -> ConversationalQueryRewriteResult:
+    return rewrite_conversational_query(query, messages)
 
 
 def assemble_context_and_generate(
@@ -547,16 +877,38 @@ def assemble_context_and_generate(
     # Start trace
     trace = trace_collector.start_trace(trace_id, org_id, user_id or "anonymous", query, kb_ids)
 
-    # Step 1: Hybrid search with optional query expansion
-    retrieval_query = _build_history_aware_query(query, messages or [])
+    # Step 1: Shared retrieval path with optional query expansion and rerank
+    rewrite_result = _rewrite_history_aware_query(query, messages or [])
+    retrieval_query = rewrite_result.rewritten
     logger.info(
-        "RAG retrieval query prepared trace_id=%s uses_history=%s retrieval_query=%r retrieval_query_length=%s",
+        "RAG retrieval query prepared trace_id=%s uses_history=%s query_rewrite_reason=%s uses_llm=%s "
+        "retrieval_query=%r retrieval_query_length=%s",
         trace_id,
         retrieval_query != query,
+        rewrite_result.reason,
+        rewrite_result.used_llm,
         format_log_text(retrieval_query, 700),
         len(retrieval_query or ""),
     )
-    sources = hybrid_search(retrieval_query, org_id, kb_ids, top_k=settings.rag_top_k, expand_query=True, trace=trace)
+    if trace and retrieval_query != query:
+        trace.add_step(
+            "query_rewrite",
+            details={
+                "used_llm": rewrite_result.used_llm,
+                "reason": rewrite_result.reason,
+                "original_length": len(query or ""),
+                "rewritten_length": len(retrieval_query or ""),
+                "rewritten_preview": format_log_text(retrieval_query, 500),
+            },
+        )
+    sources = retrieve_sources(
+        retrieval_query,
+        org_id,
+        kb_ids,
+        top_k=max(max_chunks, getattr(settings, "reranker_top_n", max_chunks)),
+        expand_query=True,
+        trace=trace,
+    )
     logger.info(
         "RAG retrieval complete trace_id=%s source_count=%s top_results=%s",
         trace_id,
@@ -564,16 +916,7 @@ def assemble_context_and_generate(
         _summarize_sources(sources),
     )
 
-    # Step 2: Rerank
-    sources = rerank_sources(retrieval_query, sources, trace=trace)
-    logger.info(
-        "RAG rerank complete trace_id=%s source_count=%s top_results=%s",
-        trace_id,
-        len(sources),
-        _summarize_sources(sources),
-    )
-
-    # Step 3: Truncate to max_chunks
+    # Step 2: Keep an upper bound before context token budgeting.
     pre_truncate_count = len(sources)
     sources = sources[:max_chunks]
     logger.info(
@@ -586,8 +929,21 @@ def assemble_context_and_generate(
         _summarize_sources(sources),
     )
 
+    # Step 3: Compress retrieved context before prompt assembly.
+    sources, compression_stats = compress_sources_for_query(retrieval_query, sources)
+    if trace:
+        trace.add_step(
+            "contextual_compression",
+            details={
+                "input_count": compression_stats.input_count,
+                "compressed_count": compression_stats.compressed_count,
+                "original_chars": compression_stats.original_chars,
+                "compressed_chars": compression_stats.compressed_chars,
+            },
+        )
+
     # Step 4: Build context
-    context, citations = build_context(sources)
+    context, citations = build_context(sources, trace=trace)
     if trace:
         trace.add_step(
             "context",
@@ -672,11 +1028,13 @@ def assemble_context_and_generate(
                 }
 
     gen_duration_ms = (time.monotonic() - t_gen_start) * 1000
+    citation_validation = validate_answer_citations(accumulated, citations)
+    final_answer = citation_validation.answer
     if trace:
         trace.model = settings.llm_model
         trace.prompt_version = "v1"
-        trace.answer_preview = format_log_text(accumulated, 1000)
-        trace.answer_length = len(accumulated)
+        trace.answer_preview = format_log_text(final_answer, 1000)
+        trace.answer_length = len(final_answer)
         trace.add_step(
             "llm_generation",
             duration_ms=gen_duration_ms,
@@ -686,22 +1044,33 @@ def assemble_context_and_generate(
                 "context_length": len(context),
                 "source_count": len(sources),
                 "chunk_count": chunk_count,
-                "answer_length": len(accumulated),
+                "answer_length": len(final_answer),
+            },
+        )
+        trace.add_step(
+            "citation",
+            details={
+                "citation_count": citation_validation.citation_count,
+                "used_citation_numbers": citation_validation.used_citation_numbers,
+                "invalid_citation_numbers": citation_validation.invalid_citation_numbers,
+                "low_confidence_citation_numbers": citation_validation.low_confidence_citation_numbers,
+                "is_valid": citation_validation.is_valid,
             },
         )
         trace.add_step(
             "answer",
             details={
-                "answer_length": len(accumulated),
+                "answer_length": len(final_answer),
                 "answer_preview": trace.answer_preview,
                 "source_count": len(sources),
             },
         )
     logger.info(
-        "RAG generation complete trace_id=%s chunks=%s answer_length=%s duration_ms=%.2f",
+        "RAG generation complete trace_id=%s chunks=%s answer_length=%s citation_valid=%s duration_ms=%.2f",
         trace_id,
         chunk_count,
-        len(accumulated),
+        len(final_answer),
+        citation_validation.is_valid,
         gen_duration_ms,
     )
 
@@ -712,13 +1081,13 @@ def assemble_context_and_generate(
         org_id,
         user_id or "anonymous",
         len(sources),
-        len(accumulated),
+        len(final_answer),
         trace.total_latency_ms,
     )
     _write_trace_to_clickhouse(trace)
 
     yield {
-        "delta": "",
+        "delta": final_answer[len(accumulated):],
         "done": True,
         "trace_id": trace_id,
         "sources": [s.to_dict() for s in sources],

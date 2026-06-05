@@ -14,7 +14,7 @@ from app.database import get_db
 from app.models.document import Document, DocumentVersion
 from app.models.task import IngestionJob
 from app.schemas.document import DocumentListResponse, DocumentResponse
-from app.workers.tasks import queue_document_ingestion
+from app.workers.tasks import queue_document_ingestion, queue_document_vector_cleanup
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="", tags=["documents"])
@@ -278,4 +278,17 @@ async def delete_document(
         .values(deleted_at=datetime.now(timezone.utc), status="deleted")
     )
     await db.commit()
+    try:
+        queue_document_vector_cleanup(
+            org_id=str(user["org_id"]),
+            document_id=str(document_id),
+        )
+    except Exception:
+        logger.warning(
+            "Delete document vector cleanup queue failed org_id=%s user_id=%s document_id=%s",
+            user["org_id"],
+            user["user_id"],
+            document_id,
+            exc_info=True,
+        )
     logger.info("Delete document succeeded org_id=%s user_id=%s document_id=%s", user["org_id"], user["user_id"], document_id)

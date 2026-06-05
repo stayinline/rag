@@ -6,6 +6,7 @@ from app.services.rag import (
     RAGSource,
     _clear_rag_caches,
     hybrid_search,
+    retrieve_sources,
     rerank_sources,
     build_context,
     assemble_context_and_generate,
@@ -73,12 +74,12 @@ def test_build_context_single_source():
 
 
 def test_build_context_uses_full_source_content_not_preview():
-    long_content = "开头。" + ("中间内容。" * 80) + "末尾答案。"
+    long_content = "start " + ("middle " * 80) + "tail_answer"
     source = RAGSource(
         chunk_id="c1",
         document_id="d1",
         document_title="Long Document",
-        section_path="正文",
+        section_path="Body",
         page_start=None,
         page_end=None,
         score=0.9,
@@ -87,9 +88,9 @@ def test_build_context_uses_full_source_content_not_preview():
 
     context, citations = build_context([source])
 
-    assert "末尾答案。" in context
+    assert "tail_answer" in context
     assert len(source.content_preview) == 300
-    assert "末尾答案。" not in citations[0]["content_preview"]
+    assert "tail_answer" not in citations[0]["content_preview"]
 
 
 def test_rerank_sources_uses_full_source_content_not_preview():
@@ -142,6 +143,41 @@ def test_build_context_multiple_sources():
     assert "[1] Doc A" in context
     assert "[2] Doc B" in context
     assert len(citations) == 2
+
+
+def test_build_context_respects_token_budget():
+    sources = [
+        RAGSource("c1", "d1", "Doc A", None, None, None, 0.9, "alpha " * 80),
+        RAGSource("c2", "d2", "Doc B", None, None, None, 0.8, "beta " * 80),
+    ]
+
+    context, citations = build_context(sources, max_tokens=40)
+
+    assert "[1] Doc A" in context
+    assert "[2] Doc B" not in context
+    assert len(citations) == 1
+
+
+def test_retrieve_sources_runs_hybrid_then_rerank():
+    sources = [
+        RAGSource("c1", "d1", "Doc1", None, None, None, 0.1, "first"),
+        RAGSource("c2", "d2", "Doc2", None, None, None, 0.2, "second"),
+    ]
+
+    with patch("app.services.rag.hybrid_search", return_value=sources) as mock_hybrid, \
+         patch("app.services.rag.rerank_sources", return_value=[sources[1]]) as mock_rerank, \
+         patch("app.services.rag.expand_parent_child_context", side_effect=lambda items, trace=None: items), \
+         patch("app.services.rag._write_retrieval_hits_to_clickhouse") as mock_hits:
+        result = retrieve_sources("query", "org", ["kb"], top_k=1, expand_query=True)
+
+    assert result == [sources[1]]
+    assert mock_hybrid.call_args.kwargs["expand_query"] is True
+    assert mock_rerank.call_args.args[0] == "query"
+    assert mock_rerank.call_args.kwargs["top_n"] == 1
+    assert sources[0].rank_before == 1
+    assert sources[1].rank_before == 2
+    assert sources[1].rank_after == 1
+    mock_hits.assert_called_once()
 
 
 def test_hybrid_search_empty_results():
@@ -307,7 +343,7 @@ def test_hybrid_search_reuses_query_embedding_when_retrieval_cache_disabled():
 
 
 def test_assemble_context_and_generate_no_results():
-    with patch("app.services.rag.hybrid_search") as mock_search:
+    with patch("app.services.rag.retrieve_sources") as mock_search:
         mock_search.return_value = []
 
         items = list(assemble_context_and_generate(
@@ -318,7 +354,7 @@ def test_assemble_context_and_generate_no_results():
         assert len(items) == 1
         assert items[0]["done"] is True
         assert items[0]["sources"] == []
-        assert "未找到" in items[0]["delta"]
+        assert items[0]["delta"]
 
 
 def test_assemble_context_and_generate_with_results():
@@ -334,9 +370,14 @@ def test_assemble_context_and_generate_with_results():
         content_preview="RAG is a technique that combines retrieval and generation.",
     )
 
-    with patch("app.services.rag.hybrid_search") as mock_search, \
+    with patch("app.services.rag.retrieve_sources") as mock_search, \
+         patch("app.services.rag.compress_sources_for_query") as mock_compress, \
          patch("app.services.rag.generate_stream") as mock_gen:
         mock_search.return_value = [source]
+        mock_compress.return_value = (
+            [source],
+            MagicMock(input_count=1, compressed_count=0, original_chars=10, compressed_chars=10),
+        )
         mock_resp = MagicMock()
         mock_resp.output = MagicMock()
         mock_resp.output.choices = [{"message": {"content": "RAG is useful."}}]
@@ -354,6 +395,7 @@ def test_assemble_context_and_generate_with_results():
         assert len(done_items[0]["sources"]) == 1
         assert done_items[0]["sources"][0]["document_title"] == "Test Doc"
         assert mock_gen.call_args.kwargs["messages"] is None
+        mock_compress.assert_called_once()
 
 
 def test_assemble_context_and_generate_passes_history_to_llm_and_retrieval():
@@ -365,32 +407,32 @@ def test_assemble_context_and_generate_passes_history_to_llm_and_retrieval():
         page_start=None,
         page_end=None,
         score=0.9,
-        content_preview="免疫治疗禁忌相关内容。",
+        content_preview="contraindication context",
     )
     messages = [
-        {"role": "system", "content": "较早历史摘要：用户一直在问免疫治疗。"},
-        {"role": "user", "content": "它适合哪些人？"},
-        {"role": "assistant", "content": "需要结合患者分型。"},
+        {"role": "system", "content": "Earlier summary: user asks about immunotherapy."},
+        {"role": "user", "content": "Who is it suitable for?"},
+        {"role": "assistant", "content": "It depends on patient subtype."},
     ]
 
-    with patch("app.services.rag.hybrid_search") as mock_search, \
+    with patch("app.services.rag.retrieve_sources") as mock_search, \
          patch("app.services.rag.generate_stream") as mock_gen:
         mock_search.return_value = [source]
         mock_resp = MagicMock()
         mock_resp.output = MagicMock()
-        mock_resp.output.choices = [{"message": {"content": "禁忌包括..."}}]
+        mock_resp.output.choices = [{"message": {"content": "Contraindications include..."}}]
         mock_gen.return_value = iter([mock_resp])
 
         list(assemble_context_and_generate(
-            query="那禁忌呢？",
+            query="What are the contraindications?",
             org_id="org-1",
             kb_ids=["kb-1"],
             messages=messages,
         ))
 
     retrieval_query = mock_search.call_args.args[0]
-    assert "较早历史摘要" in retrieval_query
-    assert "当前问题：那禁忌呢？" in retrieval_query
+    assert "Earlier summary" in retrieval_query
+    assert "What are the contraindications?" in retrieval_query
     assert mock_gen.call_args.kwargs["messages"] == messages
 
 
@@ -406,7 +448,7 @@ def test_assemble_context_and_generate_truncates_chunks():
         content_preview=f"Content {i}",
     ) for i in range(10)]
 
-    with patch("app.services.rag.hybrid_search") as mock_search, \
+    with patch("app.services.rag.retrieve_sources") as mock_search, \
          patch("app.services.rag.generate_stream") as mock_gen:
         mock_search.return_value = sources
         mock_resp = MagicMock()
@@ -424,3 +466,39 @@ def test_assemble_context_and_generate_truncates_chunks():
 
         done_items = [i for i in items if i["done"]]
         assert len(done_items[0]["sources"]) == 5
+
+
+def test_assemble_context_and_generate_appends_citation_validation_note():
+    source = RAGSource(
+        chunk_id="c1",
+        document_id="d1",
+        document_title="Test Doc",
+        section_path=None,
+        page_start=None,
+        page_end=None,
+        score=0.9,
+        content_preview="Evidence.",
+    )
+
+    with patch("app.services.rag.retrieve_sources") as mock_search, \
+         patch("app.services.rag.compress_sources_for_query") as mock_compress, \
+         patch("app.services.rag.generate_stream") as mock_gen:
+        mock_search.return_value = [source]
+        mock_compress.return_value = (
+            [source],
+            MagicMock(input_count=1, compressed_count=0, original_chars=10, compressed_chars=10),
+        )
+        mock_resp = MagicMock()
+        mock_resp.output = MagicMock()
+        mock_resp.output.choices = [{"message": {"content": "Answer cites missing [2]."}}]
+        mock_gen.return_value = iter([mock_resp])
+
+        items = list(assemble_context_and_generate(
+            query="What?",
+            org_id="org-1",
+            kb_ids=["kb-1"],
+        ))
+
+    assert items[-1]["done"] is True
+    assert "引用校验提示" in items[-1]["delta"]
+    assert "[2]" in items[-1]["delta"]

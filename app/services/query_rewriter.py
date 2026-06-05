@@ -1,6 +1,9 @@
 """Query rewriter for medical terminology expansion and multi-language support."""
 import re
 import logging
+from http import HTTPStatus
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,16 @@ class QueryRewriteResult:
         self.original = original
         self.expanded = expanded  # List of expanded query variants
         self.entities = entities  # Detected entities (drugs, diseases, targets)
+
+
+class ConversationalQueryRewriteResult:
+    """Result from resolving a conversational query into a standalone retrieval query."""
+
+    def __init__(self, original: str, rewritten: str, used_llm: bool, reason: str = ""):
+        self.original = original
+        self.rewritten = rewritten
+        self.used_llm = used_llm
+        self.reason = reason
 
 
 def normalize_drug_names(text: str) -> str:
@@ -142,6 +155,95 @@ def rewrite_query(query: str, expand_synonyms: bool = True) -> QueryRewriteResul
         {k: len(v) for k, v in result.entities.items()},
     )
     return result
+
+
+def rewrite_conversational_query(query: str, messages: list[dict] | None = None) -> ConversationalQueryRewriteResult:
+    """Resolve references in a follow-up query into a standalone retrieval query."""
+    messages = messages or []
+    if not messages:
+        return ConversationalQueryRewriteResult(original=query, rewritten=query, used_llm=False, reason="no_history")
+
+    if getattr(settings, "llm_query_rewrite", False):
+        try:
+            rewritten = _rewrite_conversational_query_with_llm(query, messages)
+            if rewritten:
+                return ConversationalQueryRewriteResult(
+                    original=query,
+                    rewritten=rewritten,
+                    used_llm=True,
+                    reason="llm",
+                )
+        except Exception as exc:
+            logger.warning("LLM query rewrite failed; falling back to deterministic rewrite: %s", exc, exc_info=True)
+
+    rewritten = _fallback_conversational_query_rewrite(query, messages)
+    return ConversationalQueryRewriteResult(original=query, rewritten=rewritten, used_llm=False, reason="fallback")
+
+
+def _rewrite_conversational_query_with_llm(query: str, messages: list[dict]) -> str:
+    from dashscope import Generation
+
+    history = _format_recent_history(messages)
+    prompt = (
+        "将用户当前问题改写为适合知识库检索的独立问题。要求：\n"
+        "1. 只输出改写后的检索问题，不要解释。\n"
+        "2. 保留医学实体、药品名、疾病名、指标名。\n"
+        "3. 如果当前问题已经独立，原样输出。\n\n"
+        f"对话历史：\n{history}\n\n当前问题：{query}"
+    )
+    response = Generation.call(
+        model=getattr(settings, "llm_query_rewrite_model", "") or getattr(settings, "summary_model", ""),
+        messages=[
+            {"role": "system", "content": "你是 RAG 检索查询改写器。"},
+            {"role": "user", "content": prompt},
+        ],
+        api_key=getattr(settings, "dashscope_api_key", "") or None,
+        result_format="message",
+        stream=False,
+        request_timeout=getattr(settings, "llm_timeout", 90),
+    )
+    if getattr(response, "status_code", None) != HTTPStatus.OK:
+        message = getattr(response, "message", "") or getattr(response, "code", "") or "unknown error"
+        raise RuntimeError(f"query rewrite failed status={getattr(response, 'status_code', None)}: {message}")
+
+    output = getattr(response, "output", None)
+    choices = getattr(output, "choices", None) if output is not None else None
+    if not choices:
+        return ""
+    rewritten = choices[0].get("message", {}).get("content", "").strip()
+    return _sanitize_rewritten_query(rewritten)
+
+
+def _fallback_conversational_query_rewrite(query: str, messages: list[dict]) -> str:
+    history = _format_recent_history(messages, max_chars=1200)
+    if not history:
+        return query
+    return f"{history}\n当前问题：{query}"
+
+
+def _format_recent_history(messages: list[dict], max_chars: int = 1800) -> str:
+    lines = []
+    for message in messages[-6:]:
+        role = message.get("role")
+        if role not in {"system", "user", "assistant"}:
+            continue
+        content = str(message.get("content", "") or "").strip()
+        if not content:
+            continue
+        if len(content) > 500:
+            content = f"{content[:500]}..."
+        lines.append(f"{role}: {content}")
+    text = "\n".join(lines)
+    return text[-max_chars:] if len(text) > max_chars else text
+
+
+def _sanitize_rewritten_query(value: str) -> str:
+    rewritten = value.strip().strip('"').strip("'").strip()
+    prefixes = ("改写后：", "检索问题：", "查询：", "Rewritten query:", "Query:")
+    for prefix in prefixes:
+        if rewritten.lower().startswith(prefix.lower()):
+            rewritten = rewritten[len(prefix):].strip()
+    return rewritten
 
 
 def rewrite_for_search(query: str) -> str:

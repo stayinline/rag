@@ -75,8 +75,8 @@ class TestCollectionSchema:
 
     def test_total_property_count(self):
         """Alert when properties are added/removed."""
-        assert len(COLLECTION_PROPERTIES) == 20, (
-            f"Expected 20 properties, got {len(COLLECTION_PROPERTIES)}. "
+        assert len(COLLECTION_PROPERTIES) == 23, (
+            f"Expected 23 properties, got {len(COLLECTION_PROPERTIES)}. "
             "Update this test if a new field was intentionally added."
         )
 
@@ -86,7 +86,8 @@ class TestCollectionSchema:
         # weaviate-client v4 uses camelCase attribute names on Property objects
         filterable = {
             "org_id", "kb_id", "document_id", "document_version_id",
-            "chunk_id", "acl_hash", "security_level", "status",
+            "chunk_id", "chunk_index", "parent_chunk_id", "child_chunk_ids",
+            "acl_hash", "security_level", "status",
             "document_type", "domain_tags", "entities", "embedding_model",
             "section_type",
         }
@@ -224,7 +225,6 @@ class TestCollectionSchema:
         """Newly ingested chunks must be draft until publish_document_task runs."""
         with patch("app.workers.tasks.settings") as mock_cfg:
             mock_cfg.embedding_model = "text-embedding-v3"
-            from datetime import datetime, timezone
             status = "draft"
         assert status == "draft"
 

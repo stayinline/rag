@@ -40,9 +40,14 @@ def test_ensure_collection_skips_existing():
     client = MagicMock()
     client.collections.exists = MagicMock(return_value=True)
     client.collections.create = MagicMock()
+    collection = MagicMock()
+    client.collections.get.return_value = collection
 
     ensure_collection(client)
+
     client.collections.create.assert_not_called()
+    client.collections.get.assert_called_once_with(COLLECTION_NAME)
+    assert collection.config.add_property.call_count == len(COLLECTION_PROPERTIES)
 
 
 def test_get_client(mock_settings):

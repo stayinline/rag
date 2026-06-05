@@ -1,5 +1,6 @@
 import logging
 import re
+import uuid
 import tiktoken
 
 from app.config import settings
@@ -132,6 +133,12 @@ def chunk_text(text: str, title: str = "") -> list[dict]:
                     "content": chunk_text_piece,
                     "section_path": current_path,
                 })
+
+    parent_chunk_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{title}:{len(text or '')}:{count_tokens(text or '')}"))
+    for idx, chunk in enumerate(chunks):
+        chunk["chunk_index"] = idx
+        chunk["parent_chunk_id"] = parent_chunk_id
+        chunk["child_chunk_ids"] = []
 
     logger.info(
         "Chunk text complete title=%s section_count=%s chunk_count=%s",

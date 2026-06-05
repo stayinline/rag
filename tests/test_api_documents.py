@@ -197,8 +197,12 @@ def test_delete_document(doc_test_client):
     mock_result.scalar_one_or_none.return_value = mock_doc
     mock_sess.execute = AsyncMock(return_value=mock_result)
 
-    resp = client.delete(f"/api/v1/documents/{mock_doc.id}")
+    with patch("app.api.v1.documents.queue_document_vector_cleanup") as mock_cleanup:
+        resp = client.delete(f"/api/v1/documents/{mock_doc.id}")
+
     assert resp.status_code == 204
+    mock_cleanup.assert_called_once()
+    assert mock_cleanup.call_args.kwargs["document_id"] == str(mock_doc.id)
 
 
 def test_delete_document_not_found(doc_test_client):

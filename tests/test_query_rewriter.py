@@ -1,9 +1,11 @@
 """Tests for query rewriter service."""
 
 from app.services.query_rewriter import (
+    _sanitize_rewritten_query,
     normalize_drug_names,
     expand_medical_terms,
     detect_entities,
+    rewrite_conversational_query,
     rewrite_query,
     rewrite_for_search,
 )
@@ -105,3 +107,27 @@ class TestRewriteForSearch:
         query = rewrite_for_search("高血压")
         assert isinstance(query, str)
         assert len(query) >= 1
+
+
+class TestConversationalRewrite:
+    def test_no_history_returns_original(self):
+        result = rewrite_conversational_query("What is the dose?", [])
+        assert result.rewritten == "What is the dose?"
+        assert result.used_llm is False
+        assert result.reason == "no_history"
+
+    def test_history_fallback_builds_standalone_query(self):
+        result = rewrite_conversational_query(
+            "What are its contraindications?",
+            [
+                {"role": "user", "content": "Tell me about pembrolizumab."},
+                {"role": "assistant", "content": "It is an immunotherapy drug."},
+            ],
+        )
+        assert "pembrolizumab" in result.rewritten
+        assert "What are its contraindications?" in result.rewritten
+        assert result.used_llm is False
+        assert result.reason == "fallback"
+
+    def test_sanitize_rewritten_query_removes_prefix(self):
+        assert _sanitize_rewritten_query("Query: standalone question") == "standalone question"

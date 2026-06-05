@@ -1,5 +1,8 @@
 import asyncio
+import importlib.util
 import logging
+import math
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +15,7 @@ from app.database import async_session
 from app.models.chunk import DocumentChunk
 from app.models.document import Document, DocumentVersion
 from app.models.paper import Paper
-from app.services.chunker import chunk_text
+from app.services.chunker import chunk_text, count_tokens
 from app.services.embedding import embed_texts
 from app.services.file_parser import parse_file
 from app.services.paper_chunker import chunk_paper
@@ -20,6 +23,7 @@ from app.services.paper_parser import parse_paper_local, paper_references_to_tex
 from app.services.metadata_enhancer import enhance_via_crossref, enhance_via_pubmed, extract_medical_entities
 from app.services.weaviate_client import COLLECTION_NAME, get_client
 from app.workers.celery_app import celery_app
+from weaviate.classes.query import Filter
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +95,50 @@ def _upsert_weaviate_object(
         return "updated"
 
 
+def _delete_weaviate_document_chunks(collection: Any, *, org_id: str, document_id: str, version_id: str | None = None) -> int:
+    conditions = [
+        Filter.by_property("org_id").equal(str(org_id)),
+        Filter.by_property("document_id").equal(str(document_id)),
+    ]
+    if version_id:
+        conditions.append(Filter.by_property("document_version_id").equal(str(version_id)))
+
+    result = collection.data.delete_many(where=Filter.all_of(conditions), verbose=True)
+    matches = getattr(result, "matches", None)
+    if matches is not None:
+        return int(matches)
+    successful = getattr(result, "successful", None)
+    if successful is not None:
+        return int(successful)
+    objects = getattr(result, "objects", None)
+    return len(objects or [])
+
+
+def _make_chunk_ids(org_id: str, version_id: str, chunks: list[dict], *, namespace: str = "") -> list[str]:
+    prefix = f"{org_id}:{version_id}"
+    if namespace:
+        prefix = f"{prefix}:{namespace}"
+    return [str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{prefix}:{idx}")) for idx in range(len(chunks))]
+
+
+def _normalize_parent_child_metadata(chunks: list[dict], *, parent_seed: str, child_ids: list[str]) -> list[dict]:
+    parent_chunk_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, parent_seed))
+    for idx, chunk in enumerate(chunks):
+        chunk["chunk_index"] = idx
+        chunk["parent_chunk_id"] = parent_chunk_id
+        chunk["child_chunk_ids"] = child_ids
+    return chunks
+
+
+def _uuid_or_none(value: Any):
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        return None
+
+
 def _batch_publish_weaviate_chunks(collection: Any, chunk_ids: list[str], *, batch_size: int = 100) -> int:
     updated_count = 0
 
@@ -139,6 +187,153 @@ def _task_request_id(task: Any) -> str:
 
 def _task_retries(task: Any) -> int:
     return int(getattr(getattr(task, "request", None), "retries", 0) or 0)
+
+
+_EVAL_TOKEN_RE = re.compile(r"[\w\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+")
+
+
+def _normalize_eval_config(config: dict | None) -> dict:
+    config = dict(config or {})
+    return {
+        "top_k": int(config.get("top_k") or 10),
+        "expand_query": bool(config.get("expand_query", True)),
+        "generate_answers": bool(config.get("generate_answers", False)),
+        "use_ragas": bool(config.get("use_ragas", False)),
+    }
+
+
+def _rank_metrics(sources: list[Any], expected_doc_ids: list[str], *, k: int) -> dict:
+    expected = {str(item) for item in expected_doc_ids or [] if item}
+    if not expected:
+        return {"doc_hit": False, "first_hit_rank": 0, "mrr": 0.0, "ndcg": 0.0}
+
+    first_hit_rank = 0
+    dcg = 0.0
+    for rank, source in enumerate(sources[:k], start=1):
+        if str(getattr(source, "document_id", "")) in expected:
+            if first_hit_rank == 0:
+                first_hit_rank = rank
+            dcg += 1.0 / math.log2(rank + 1)
+
+    ideal_hits = min(len(expected), k)
+    ideal_dcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
+    return {
+        "doc_hit": first_hit_rank > 0,
+        "first_hit_rank": first_hit_rank,
+        "mrr": 1.0 / first_hit_rank if first_hit_rank else 0.0,
+        "ndcg": dcg / ideal_dcg if ideal_dcg else 0.0,
+    }
+
+
+def _kb_hit(sources: list[Any], expected_kb_ids: list[str]) -> bool:
+    expected = {str(item) for item in expected_kb_ids or [] if item}
+    if not expected:
+        return False
+    return any(str(getattr(source, "kb_id", "")) in expected for source in sources)
+
+
+def _collect_generated_answer(
+    *,
+    query: str,
+    org_id: str,
+    kb_ids: list[str],
+    max_chunks: int,
+) -> tuple[str, list[dict]]:
+    from app.services.rag import assemble_context_and_generate
+
+    answer = ""
+    sources: list[dict] = []
+    for item in assemble_context_and_generate(
+        query=query,
+        org_id=org_id,
+        kb_ids=kb_ids,
+        max_chunks=max_chunks,
+    ):
+        answer += item.get("delta", "")
+        if item.get("done"):
+            sources = item.get("sources", [])
+    return answer, sources
+
+
+def _local_answer_quality(answer: str, expected_answer: str | None, contexts: list[str]) -> dict:
+    if not expected_answer:
+        return {}
+    answer_terms = _eval_terms(answer)
+    expected_terms = _eval_terms(expected_answer)
+    context_terms = _eval_terms("\n".join(contexts))
+    if not answer_terms or not expected_terms:
+        relevancy = 0.0
+    else:
+        relevancy = len(answer_terms & expected_terms) / len(expected_terms)
+    if not answer_terms or not context_terms:
+        faithfulness = 0.0
+    else:
+        faithfulness = len(answer_terms & context_terms) / len(answer_terms)
+    return {
+        "answer_relevancy": round(relevancy, 4),
+        "faithfulness": round(faithfulness, 4),
+    }
+
+
+def _eval_terms(text: str) -> set[str]:
+    return {term.lower() for term in _EVAL_TOKEN_RE.findall(text or "") if len(term.strip()) >= 2}
+
+
+def _ragas_available() -> bool:
+    return importlib.util.find_spec("ragas") is not None
+
+
+def _empty_ragas_metrics(*, requested: bool) -> dict:
+    return {
+        "ragas_requested": requested,
+        "ragas_available": _ragas_available(),
+        "ragas_evaluated": 0,
+    }
+
+
+def _run_ragas_metrics(records: list[dict], *, requested: bool) -> dict:
+    metrics = _empty_ragas_metrics(requested=requested)
+    if not requested or not records or not metrics["ragas_available"]:
+        return metrics
+
+    try:
+        from datasets import Dataset
+        from ragas import evaluate
+        from ragas.metrics import answer_relevancy, faithfulness
+
+        dataset = Dataset.from_list([
+            {
+                "question": record["question"],
+                "answer": record["answer"],
+                "contexts": record["contexts"],
+                "ground_truth": record["ground_truth"],
+                "reference": record["ground_truth"],
+            }
+            for record in records
+        ])
+        result = evaluate(dataset, metrics=[faithfulness, answer_relevancy])
+        scores = _ragas_scores_to_dict(result)
+        metrics.update({
+            "ragas_evaluated": len(records),
+            "ragas_faithfulness": round(float(scores.get("faithfulness", 0.0) or 0.0), 4),
+            "ragas_answer_relevancy": round(float(scores.get("answer_relevancy", 0.0) or 0.0), 4),
+        })
+    except Exception as exc:
+        metrics["ragas_error"] = str(exc)[:500]
+        logger.warning("RAGAS evaluation failed: %s", exc, exc_info=True)
+    return metrics
+
+
+def _ragas_scores_to_dict(result: Any) -> dict:
+    if hasattr(result, "to_pandas"):
+        frame = result.to_pandas()
+        return frame.mean(numeric_only=True).to_dict()
+    if isinstance(result, dict):
+        return result
+    try:
+        return dict(result)
+    except (TypeError, ValueError):
+        return {}
 
 
 async def _mark_ingestion_job(
@@ -258,6 +453,72 @@ def queue_document_ingestion(
     return async_result
 
 
+def queue_document_vector_cleanup(*, org_id: str, document_id: str, version_id: str | None = None):
+    """Queue asynchronous cleanup for a document's vector and chunk metadata."""
+    async_result = cleanup_document_vectors_task.apply_async(
+        kwargs={
+            "org_id": str(org_id),
+            "document_id": str(document_id),
+            "version_id": str(version_id) if version_id else None,
+        }
+    )
+    logger.info(
+        "Document vector cleanup queued task_id=%s org_id=%s document_id=%s version_id=%s",
+        async_result.id,
+        org_id,
+        document_id,
+        version_id,
+    )
+    return async_result
+
+
+async def _replace_document_chunks(
+    *,
+    org_id: str,
+    kb_id: str,
+    document_id: str,
+    version_id: str,
+    chunks: list[dict],
+    chunk_ids: list[str],
+) -> None:
+    from sqlalchemy import delete
+
+    org_uuid = uuid.UUID(str(org_id))
+    kb_uuid = uuid.UUID(str(kb_id))
+    document_uuid = uuid.UUID(str(document_id))
+    version_uuid = uuid.UUID(str(version_id))
+
+    async with async_session() as session:
+        await session.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document_uuid,
+                DocumentChunk.document_version_id == version_uuid,
+            )
+        )
+        for idx, (chunk_data, chunk_id) in enumerate(zip(chunks, chunk_ids)):
+            content = chunk_data.get("content", "")
+            session.add(
+                DocumentChunk(
+                    id=uuid.UUID(str(chunk_id)),
+                    org_id=org_uuid,
+                    kb_id=kb_uuid,
+                    document_id=document_uuid,
+                    document_version_id=version_uuid,
+                    chunk_index=idx,
+                    parent_chunk_id=_uuid_or_none(chunk_data.get("parent_chunk_id")),
+                    weaviate_id=chunk_id,
+                    content_preview=content[:300],
+                    token_count=chunk_data.get("token_count"),
+                    page_start=chunk_data.get("page_start"),
+                    page_end=chunk_data.get("page_end"),
+                    section_path=chunk_data.get("section_path"),
+                    source_locator=chunk_data.get("source_locator") or {},
+                    acl_hash=chunk_data.get("acl_hash"),
+                )
+            )
+        await session.commit()
+
+
 @celery_app.task(bind=True, name="parse_document", max_retries=3)
 def parse_document_task(
     self,
@@ -356,6 +617,12 @@ def chunk_and_embed_task(
         )
 
         chunks = chunk_text(text, title=title)
+        chunk_ids = _make_chunk_ids(org_id, version_id, chunks)
+        chunks = _normalize_parent_child_metadata(
+            chunks,
+            parent_seed=f"{org_id}:{version_id}:document",
+            child_ids=chunk_ids,
+        )
         logger.info(
             "Task chunk_and_embed chunking complete task_id=%s document_id=%s chunk_count=%s",
             _task_request_id(self),
@@ -387,18 +654,34 @@ def chunk_and_embed_task(
         client = get_client()
         logger.info("Task chunk_and_embed using Weaviate task_id=%s document_id=%s", _task_request_id(self), document_id)
         collection = client.collections.get(COLLECTION_NAME)
-        chunk_ids = []
+        deleted_count = _delete_weaviate_document_chunks(
+            collection,
+            org_id=org_id,
+            document_id=document_id,
+            version_id=version_id,
+        )
+        logger.info(
+            "Task chunk_and_embed stale Weaviate chunks deleted task_id=%s document_id=%s version_id=%s deleted=%s",
+            _task_request_id(self),
+            document_id,
+            version_id,
+            deleted_count,
+        )
         inserted_count = 0
         updated_count = 0
 
         for idx, (chunk_data, vector) in enumerate(zip(chunks, all_vectors)):
-            weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:{idx}"))
+            weaviate_uuid = chunk_ids[idx]
+            chunk_data["token_count"] = count_tokens(chunk_data.get("content", ""))
             properties = {
                 "org_id": org_id,
                 "kb_id": kb_id,
                 "document_id": document_id,
                 "document_version_id": version_id,
                 "chunk_id": weaviate_uuid,
+                "chunk_index": chunk_data.get("chunk_index", idx),
+                "parent_chunk_id": chunk_data.get("parent_chunk_id", ""),
+                "child_chunk_ids": chunk_data.get("child_chunk_ids", []),
                 "security_level": "internal",
                 "status": "draft",
                 "content": chunk_data["content"],
@@ -426,7 +709,42 @@ def chunk_and_embed_task(
                 inserted_count += 1
             else:
                 updated_count += 1
-            chunk_ids.append(weaviate_uuid)
+
+        try:
+            _run_async(
+                _replace_document_chunks(
+                    org_id=org_id,
+                    kb_id=kb_id,
+                    document_id=document_id,
+                    version_id=version_id,
+                    chunks=chunks,
+                    chunk_ids=chunk_ids,
+                )
+            )
+            logger.info(
+                "Task chunk_and_embed DocumentChunk rows replaced task_id=%s document_id=%s chunk_count=%s",
+                _task_request_id(self),
+                document_id,
+                len(chunk_ids),
+            )
+        except ValueError:
+            logger.warning(
+                "Task chunk_and_embed skipped DocumentChunk persistence due to non-UUID identifiers "
+                "task_id=%s org_id=%s kb_id=%s document_id=%s version_id=%s",
+                _task_request_id(self),
+                org_id,
+                kb_id,
+                document_id,
+                version_id,
+                exc_info=True,
+            )
+        except Exception:
+            logger.exception(
+                "Task chunk_and_embed DocumentChunk persistence failed task_id=%s document_id=%s",
+                _task_request_id(self),
+                document_id,
+            )
+            raise
 
         logger.info(
             "Task chunk_and_embed Weaviate upsert complete task_id=%s document_id=%s chunk_count=%s inserted=%s updated=%s",
@@ -463,6 +781,78 @@ def chunk_and_embed_task(
             _task_retries(self),
         )
         raise self.retry(exc=e, countdown=60)
+
+
+@celery_app.task(bind=True, name="cleanup_document_vectors", max_retries=3)
+def cleanup_document_vectors_task(
+    self,
+    org_id: str,
+    document_id: str,
+    version_id: str | None = None,
+) -> dict:
+    """Delete a document's vector objects and PG chunk metadata."""
+    try:
+        logger.info(
+            "Task cleanup_document_vectors start task_id=%s org_id=%s document_id=%s version_id=%s",
+            _task_request_id(self),
+            org_id,
+            document_id,
+            version_id,
+        )
+        client = get_client()
+        collection = client.collections.get(COLLECTION_NAME)
+        deleted_vectors = _delete_weaviate_document_chunks(
+            collection,
+            org_id=org_id,
+            document_id=document_id,
+            version_id=version_id,
+        )
+
+        async def _delete_chunks() -> int:
+            from sqlalchemy import delete
+
+            try:
+                document_uuid = uuid.UUID(str(document_id))
+                version_uuid = uuid.UUID(str(version_id)) if version_id else None
+            except ValueError:
+                return 0
+
+            async with async_session() as session:
+                stmt = delete(DocumentChunk).where(DocumentChunk.document_id == document_uuid)
+                if version_uuid:
+                    stmt = stmt.where(DocumentChunk.document_version_id == version_uuid)
+                result = await session.execute(stmt)
+                await session.commit()
+                return int(getattr(result, "rowcount", 0) or 0)
+
+        deleted_chunks = _run_async(_delete_chunks())
+        logger.info(
+            "Task cleanup_document_vectors complete task_id=%s org_id=%s document_id=%s version_id=%s "
+            "deleted_vectors=%s deleted_chunks=%s",
+            _task_request_id(self),
+            org_id,
+            document_id,
+            version_id,
+            deleted_vectors,
+            deleted_chunks,
+        )
+        return {
+            "org_id": org_id,
+            "document_id": document_id,
+            "version_id": version_id,
+            "deleted_vectors": deleted_vectors,
+            "deleted_chunks": deleted_chunks,
+        }
+    except Exception as exc:
+        logger.exception(
+            "Task cleanup_document_vectors failed task_id=%s org_id=%s document_id=%s version_id=%s retry=%s",
+            _task_request_id(self),
+            org_id,
+            document_id,
+            version_id,
+            _task_retries(self),
+        )
+        raise self.retry(exc=exc, countdown=30)
 
 
 @celery_app.task(bind=True, name="chunk_and_embed_from_parse", max_retries=3)
@@ -760,6 +1150,12 @@ def parse_paper_task(
                 "page_end": None,
                 "boost": 0.5,
             })
+        chunk_ids = _make_chunk_ids(org_id, version_id, paper_chunks, namespace="paper")
+        paper_chunks = _normalize_parent_child_metadata(
+            paper_chunks,
+            parent_seed=f"{org_id}:{version_id}:paper",
+            child_ids=chunk_ids,
+        )
         logger.info(
             "Task parse_paper chunking complete task_id=%s paper_id=%s chunk_count=%s reference_text_length=%s",
             self.request.id,
@@ -788,18 +1184,35 @@ def parse_paper_task(
         client = get_client()
         logger.info("Task parse_paper using Weaviate task_id=%s paper_id=%s", self.request.id, paper_id)
         collection = client.collections.get(COLLECTION_NAME)
-        chunk_ids = []
+        deleted_count = _delete_weaviate_document_chunks(
+            collection,
+            org_id=org_id,
+            document_id=document_id,
+            version_id=version_id,
+        )
+        logger.info(
+            "Task parse_paper stale Weaviate chunks deleted task_id=%s paper_id=%s document_id=%s version_id=%s deleted=%s",
+            self.request.id,
+            paper_id,
+            document_id,
+            version_id,
+            deleted_count,
+        )
         inserted_count = 0
         updated_count = 0
 
         for idx, (chunk_data, vector) in enumerate(zip(paper_chunks, all_vectors)):
-            weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{org_id}:{version_id}:paper:{idx}"))
+            weaviate_uuid = chunk_ids[idx]
+            chunk_data["token_count"] = count_tokens(chunk_data.get("content", ""))
             properties = {
                 "org_id": org_id,
                 "kb_id": resolved_kb_id or "",
                 "document_id": document_id,
                 "document_version_id": version_id,
                 "chunk_id": weaviate_uuid,
+                "chunk_index": chunk_data.get("chunk_index", idx),
+                "parent_chunk_id": chunk_data.get("parent_chunk_id", ""),
+                "child_chunk_ids": chunk_data.get("child_chunk_ids", []),
                 "security_level": "internal",
                 "status": "ready",  # Papers go directly to ready
                 "content": chunk_data["content"],
@@ -827,7 +1240,43 @@ def parse_paper_task(
                 inserted_count += 1
             else:
                 updated_count += 1
-            chunk_ids.append(weaviate_uuid)
+        try:
+            _run_async(
+                _replace_document_chunks(
+                    org_id=org_id,
+                    kb_id=resolved_kb_id or "",
+                    document_id=document_id,
+                    version_id=version_id,
+                    chunks=paper_chunks,
+                    chunk_ids=chunk_ids,
+                )
+            )
+            logger.info(
+                "Task parse_paper DocumentChunk rows replaced task_id=%s paper_id=%s document_id=%s chunk_count=%s",
+                self.request.id,
+                paper_id,
+                document_id,
+                len(chunk_ids),
+            )
+        except ValueError:
+            logger.warning(
+                "Task parse_paper skipped DocumentChunk persistence due to non-UUID identifiers "
+                "task_id=%s org_id=%s kb_id=%s document_id=%s version_id=%s",
+                self.request.id,
+                org_id,
+                resolved_kb_id,
+                document_id,
+                version_id,
+                exc_info=True,
+            )
+        except Exception:
+            logger.exception(
+                "Task parse_paper DocumentChunk persistence failed task_id=%s paper_id=%s document_id=%s",
+                self.request.id,
+                paper_id,
+                document_id,
+            )
+            raise
         logger.info(
             "Task parse_paper Weaviate upsert complete task_id=%s paper_id=%s chunk_count=%s inserted=%s updated=%s",
             self.request.id,
@@ -899,15 +1348,18 @@ def run_evaluation_task(
     """Run evaluation against an evaluation set."""
     from sqlalchemy import select
     from app.models.audit import EvaluationQuestion, EvaluationRun
-    from app.services.rag import hybrid_search
+    from app.services.rag import retrieve_sources
+    from app.services.rag_trace import trace_collector
 
     try:
+        eval_config = _normalize_eval_config(config)
         logger.info(
-            "Task run_evaluation start task_id=%s org_id=%s run_id=%s eval_set_id=%s",
+            "Task run_evaluation start task_id=%s org_id=%s run_id=%s eval_set_id=%s config=%s",
             self.request.id,
             org_id,
             run_id,
             eval_set_id,
+            eval_config,
         )
         async def _run():
             async with async_session() as session:
@@ -940,7 +1392,15 @@ def run_evaluation_task(
                     "zero_result": 0,
                     "correct_kb_hit": 0,
                     "correct_doc_hit": 0,
+                    "mrr_at_10": 0.0,
+                    "ndcg_at_10": 0.0,
+                    "evaluated_answers": 0,
+                    "answer_relevancy": 0.0,
+                    "faithfulness": 0.0,
                 }
+                local_answer_relevancy = []
+                local_faithfulness = []
+                ragas_records = []
 
                 for q in questions:
                     logger.debug(
@@ -951,14 +1411,23 @@ def run_evaluation_task(
                         len(q.expected_kb_ids or []),
                         len(q.expected_doc_ids or []),
                     )
-                    # Run search
-                    sources = hybrid_search(
+                    trace_id = str(uuid.uuid4())
+                    trace = trace_collector.start_trace(
+                        trace_id,
+                        org_id,
+                        "evaluation",
+                        q.question,
+                        q.expected_kb_ids or [],
+                    )
+
+                    sources = retrieve_sources(
                         query=q.question,
                         org_id=org_id,
                         kb_ids=q.expected_kb_ids or [],
-                        top_k=10,
+                        top_k=eval_config["top_k"],
+                        expand_query=eval_config["expand_query"],
+                        trace=trace,
                     )
-                    retrieved_doc_ids = {s.document_id for s in sources}
                     logger.debug(
                         "Task run_evaluation question search complete task_id=%s run_id=%s question_id=%s source_count=%s",
                         self.request.id,
@@ -972,21 +1441,51 @@ def run_evaluation_task(
                         metrics["zero_result"] += 1
                         continue
 
-                    # Check if expected KBs are in results
-                    if q.expected_kb_ids:
-                        metrics["correct_kb_hit"] += 1  # simplified
+                    if _kb_hit(sources, q.expected_kb_ids or []):
+                        metrics["correct_kb_hit"] += 1
 
-                    # Check if expected docs are in results
-                    if q.expected_doc_ids:
-                        expected = set(q.expected_doc_ids)
-                        hits = expected & retrieved_doc_ids
-                        if hits:
-                            metrics["correct_doc_hit"] += 1
+                    rank_metrics = _rank_metrics(sources, q.expected_doc_ids or [], k=eval_config["top_k"])
+                    if rank_metrics["doc_hit"]:
+                        metrics["correct_doc_hit"] += 1
+                    metrics["mrr_at_10"] += rank_metrics["mrr"]
+                    metrics["ndcg_at_10"] += rank_metrics["ndcg"]
+
+                    if eval_config["generate_answers"] and q.expected_answer:
+                        answer, generated_sources = _collect_generated_answer(
+                            query=q.question,
+                            org_id=org_id,
+                            kb_ids=q.expected_kb_ids or [],
+                            max_chunks=eval_config["top_k"],
+                        )
+                        contexts = [
+                            str(getattr(source, "content", "") or "")
+                            for source in sources
+                        ]
+                        quality = _local_answer_quality(answer, q.expected_answer, contexts)
+                        if quality:
+                            metrics["evaluated_answers"] += 1
+                            local_answer_relevancy.append(quality["answer_relevancy"])
+                            local_faithfulness.append(quality["faithfulness"])
+                            ragas_records.append({
+                                "question": q.question,
+                                "answer": answer,
+                                "contexts": contexts,
+                                "ground_truth": q.expected_answer,
+                                "generated_source_count": len(generated_sources),
+                            })
 
                 # Compute final metrics
                 total = metrics["total_questions"]
                 metrics["recall_at_10"] = metrics["correct_doc_hit"] / max(total, 1)
                 metrics["zero_result_rate"] = metrics["zero_result"] / max(total, 1)
+                metrics["kb_hit_rate_at_10"] = metrics["correct_kb_hit"] / max(total, 1)
+                metrics["mrr_at_10"] = metrics["mrr_at_10"] / max(total, 1)
+                metrics["ndcg_at_10"] = metrics["ndcg_at_10"] / max(total, 1)
+                if local_answer_relevancy:
+                    metrics["answer_relevancy"] = sum(local_answer_relevancy) / len(local_answer_relevancy)
+                if local_faithfulness:
+                    metrics["faithfulness"] = sum(local_faithfulness) / len(local_faithfulness)
+                metrics.update(_run_ragas_metrics(ragas_records, requested=eval_config["use_ragas"]))
 
                 # Update run status to completed
                 await session.execute(

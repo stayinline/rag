@@ -3,6 +3,7 @@ import asyncio
 import os
 import tempfile
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -70,6 +71,60 @@ def test_run_async_propagates_coroutine_exception():
         assert str(exc) == "db update failed"
     finally:
         _clear_worker_async_context(tasks)
+
+
+def test_normalize_parent_child_metadata_uses_actual_child_ids():
+    from app.workers.tasks import _normalize_parent_child_metadata
+
+    chunks = [
+        {"content": "alpha", "child_chunk_ids": []},
+        {"content": "beta", "chunk_index": 99},
+    ]
+    child_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+
+    result = _normalize_parent_child_metadata(
+        chunks,
+        parent_seed="org:version:document",
+        child_ids=child_ids,
+    )
+
+    assert result[0]["chunk_index"] == 0
+    assert result[1]["chunk_index"] == 1
+    assert result[0]["child_chunk_ids"] == child_ids
+    assert result[1]["child_chunk_ids"] == child_ids
+    assert result[0]["parent_chunk_id"] == result[1]["parent_chunk_id"]
+
+
+def test_eval_rank_metrics_and_kb_hit():
+    from app.services.rag import RAGSource
+    from app.workers.tasks import _kb_hit, _rank_metrics
+
+    expected_doc = str(uuid.uuid4())
+    expected_kb = str(uuid.uuid4())
+    sources = [
+        RAGSource(str(uuid.uuid4()), str(uuid.uuid4()), "Doc A", None, None, None, 0.4, "a", kb_id=str(uuid.uuid4())),
+        RAGSource(str(uuid.uuid4()), expected_doc, "Doc B", None, None, None, 0.9, "b", kb_id=expected_kb),
+    ]
+
+    metrics = _rank_metrics(sources, [expected_doc], k=10)
+
+    assert metrics["doc_hit"] is True
+    assert metrics["first_hit_rank"] == 2
+    assert metrics["mrr"] == 0.5
+    assert _kb_hit(sources, [expected_kb]) is True
+
+
+def test_local_answer_quality_scores_overlap():
+    from app.workers.tasks import _local_answer_quality
+
+    metrics = _local_answer_quality(
+        "pembrolizumab treats melanoma",
+        "pembrolizumab melanoma",
+        ["pembrolizumab is used for melanoma"],
+    )
+
+    assert metrics["answer_relevancy"] == 1.0
+    assert metrics["faithfulness"] > 0
 
 
 def test_parse_document_task_success(tmp_path):
@@ -145,6 +200,8 @@ Here we describe the methods used in this study about retrieval.
 
         mock_w_client = MagicMock()
         mock_collection = MagicMock()
+        mock_collection.data.exists.return_value = False
+        mock_collection.data.delete_many.return_value = MagicMock(matches=0)
         mock_w_client.collections.get = MagicMock(return_value=mock_collection)
         mock_client.return_value = mock_w_client
 
@@ -164,6 +221,59 @@ Here we describe the methods used in this study about retrieval.
     assert len(result["chunk_ids"]) == result["chunk_count"]
     first_insert = mock_collection.data.insert.call_args_list[0]
     assert first_insert.kwargs["properties"]["embedding_model"] == "configured-embedding-model"
+    os.unlink(parsed_path)
+
+
+def test_chunk_and_embed_task_persists_document_chunks():
+    from app.models.chunk import DocumentChunk
+    from app.workers.tasks import chunk_and_embed_task
+
+    org_id = str(uuid.uuid4())
+    kb_id = str(uuid.uuid4())
+    document_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write("# Intro\nFirst content.\n\n# Body\nSecond content.")
+        f.flush()
+        parsed_path = f.name
+
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock()
+    mock_session.commit = AsyncMock()
+    added_objects = []
+    mock_session.add = MagicMock(side_effect=added_objects.append)
+    mock_session_factory = MagicMock()
+    mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.workers.tasks.get_client") as mock_client, \
+         patch("app.workers.tasks.embed_texts") as mock_embed, \
+         patch("app.workers.tasks.async_session", mock_session_factory), \
+         patch("app.workers.tasks.settings") as mock_settings:
+        mock_settings.embedding_model = "configured-embedding-model"
+        mock_embed.return_value = [[0.1] * 1536, [0.2] * 1536]
+        mock_w_client = MagicMock()
+        mock_collection = MagicMock()
+        mock_collection.data.exists.return_value = False
+        mock_collection.data.delete_many.return_value = MagicMock(matches=0)
+        mock_w_client.collections.get.return_value = mock_collection
+        mock_client.return_value = mock_w_client
+
+        result = chunk_and_embed_task(
+            org_id,
+            document_id,
+            version_id,
+            kb_id,
+            "Test Document",
+            parsed_path,
+        )
+
+    assert result["chunk_count"] >= 2
+    chunk_rows = [obj for obj in added_objects if isinstance(obj, DocumentChunk)]
+    assert len(chunk_rows) == result["chunk_count"]
+    assert chunk_rows[0].weaviate_id == result["chunk_ids"][0]
+    assert chunk_rows[0].token_count is not None
     os.unlink(parsed_path)
 
 
@@ -278,6 +388,39 @@ def test_batch_publish_weaviate_chunks_fails_when_chunk_missing():
         assert "missing 1 chunks" in str(exc)
 
     collection.batch.fixed_size.assert_not_called()
+
+
+def test_cleanup_document_vectors_task_deletes_weaviate_and_chunks():
+    from app.workers.tasks import cleanup_document_vectors_task
+
+    document_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.rowcount = 3
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.commit = AsyncMock()
+    mock_session_factory = MagicMock()
+    mock_session_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.workers.tasks.get_client") as mock_client, \
+         patch("app.workers.tasks.async_session", mock_session_factory):
+        mock_w_client = MagicMock()
+        mock_collection = MagicMock()
+        mock_collection.data.delete_many.return_value = MagicMock(matches=2)
+        mock_w_client.collections.get.return_value = mock_collection
+        mock_client.return_value = mock_w_client
+
+        result = cleanup_document_vectors_task(
+            str(uuid.uuid4()),
+            document_id,
+            version_id,
+        )
+
+    assert result["deleted_vectors"] == 2
+    assert result["deleted_chunks"] == 3
+    mock_collection.data.delete_many.assert_called_once()
 
 
 def test_chunk_and_embed_task_missing_file():
@@ -437,6 +580,8 @@ def test_parse_paper_task_writes_kb_id_to_weaviate():
 
     mock_w_client = MagicMock()
     mock_collection = MagicMock()
+    mock_collection.data.exists.return_value = False
+    mock_collection.data.delete_many.return_value = MagicMock(matches=0)
     mock_w_client.collections.get.return_value = mock_collection
 
     kb_id = "kb-123"
@@ -465,6 +610,7 @@ def test_parse_paper_task_writes_kb_id_to_weaviate():
 def test_task_names():
     """Verify task names are properly configured."""
     from app.workers.tasks import (
+        cleanup_document_vectors_task,
         parse_document_task,
         chunk_and_embed_task,
         chunk_and_embed_from_parse_task,
@@ -479,6 +625,7 @@ def test_task_names():
     assert chunk_and_embed_from_parse_task.name == "chunk_and_embed_from_parse"
     assert publish_document_task.name == "publish_document"
     assert publish_document_from_chunks_task.name == "publish_document_from_chunks"
+    assert cleanup_document_vectors_task.name == "cleanup_document_vectors"
     assert parse_paper_task.name == "parse_paper"
     assert run_evaluation_task.name == "run_evaluation"
 

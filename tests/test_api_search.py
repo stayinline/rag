@@ -18,7 +18,7 @@ def test_search_with_results(test_client):
         content_preview="The methods section describes...",
     )
 
-    with patch("app.api.v1.search.hybrid_search") as mock_search:
+    with patch("app.api.v1.search.retrieve_sources") as mock_search:
         mock_search.return_value = [source]
 
         resp = test_client.post(
@@ -36,7 +36,7 @@ def test_search_with_results(test_client):
 
 
 def test_search_empty_results(test_client):
-    with patch("app.api.v1.search.hybrid_search") as mock_search:
+    with patch("app.api.v1.search.retrieve_sources") as mock_search:
         mock_search.return_value = []
 
         resp = test_client.post(
@@ -53,7 +53,7 @@ def test_search_empty_results(test_client):
 
 def test_search_with_kb_filter(test_client):
     kb_id = str(uuid.uuid4())
-    with patch("app.api.v1.search.hybrid_search") as mock_search:
+    with patch("app.api.v1.search.retrieve_sources") as mock_search:
         mock_search.return_value = []
 
         resp = test_client.post(
@@ -64,6 +64,7 @@ def test_search_with_kb_filter(test_client):
     assert resp.status_code == 200
     call_args = mock_search.call_args
     assert kb_id in call_args[1]["kb_ids"]
+    assert call_args[1]["expand_query"] is True
 
 
 def test_search_unauthorized():

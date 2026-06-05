@@ -2,6 +2,7 @@
 import pytest
 
 from app.services.reranker import (
+    BGEReranker,
     MockReranker,
     BM25Reranker,
     get_reranker,
@@ -119,6 +120,50 @@ class TestBM25Reranker:
         assert len(results) == 2
 
 
+class TestBGEReranker:
+    def test_calls_dashscope_text_rerank(self):
+        docs = ["first doc", "second doc"]
+        reranker = BGEReranker(model="gte-rerank-v2", top_n=2)
+
+        class Output:
+            results = [
+                {"index": 1, "relevance_score": 0.95},
+                {"index": 0, "relevance_score": 0.15},
+            ]
+
+        class Response:
+            status_code = 200
+            output = Output()
+
+        with pytest.MonkeyPatch.context() as mp:
+            from app.config import settings
+
+            mp.setattr(settings, "dashscope_api_key", "test-key")
+            with pytest.MonkeyPatch.context() as mp_import:
+                import dashscope
+
+                calls = {}
+
+                def fake_call(**kwargs):
+                    calls.update(kwargs)
+                    return Response()
+
+                mp_import.setattr(dashscope.TextReRank, "call", fake_call)
+                results = reranker.rerank("query", docs)
+
+        assert [r.index for r in results] == [1, 0]
+        assert calls["model"] == "gte-rerank-v2"
+        assert calls["query"] == "query"
+        assert calls["documents"] == docs
+        assert calls["top_n"] == 2
+        assert calls["api_key"] == "test-key"
+
+    def test_raises_without_model(self):
+        reranker = BGEReranker(model="")
+        with pytest.raises(ValueError):
+            reranker.rerank("query", ["doc"])
+
+
 class TestGetReranker:
     def test_get_mock_reranker(self):
         from app.config import settings
@@ -133,6 +178,14 @@ class TestGetReranker:
             mp.setattr(settings, "reranker_type", "bm25")
             reranker = get_reranker()
             assert isinstance(reranker, BM25Reranker)
+
+    def test_get_bge_reranker(self):
+        from app.config import settings
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(settings, "reranker_type", "bge")
+            mp.setattr(settings, "rerank_model_name", "gte-rerank-v2")
+            reranker = get_reranker()
+            assert isinstance(reranker, BGEReranker)
 
     def test_default_is_bm25(self):
         from app.config import settings
