@@ -148,6 +148,12 @@ class LowRatedAnswerResponse(BaseModel):
     total: int
 
 
+class FeedbackWeightsResponse(BaseModel):
+    sample_count: int
+    chunk_weights: dict[str, float] = Field(default_factory=dict)
+    document_weights: dict[str, float] = Field(default_factory=dict)
+
+
 class RAGAnalyticsSummary(BaseModel):
     total_queries: int
     avg_latency_ms: float

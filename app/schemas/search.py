@@ -28,6 +28,9 @@ class SearchResultItem(BaseModel):
     vector_score: float
     bm25_score: float
     combined_score: float
+    metadata_score: float = 0.0
+    feedback_score: float = 0.0
+    hybrid_score: float = 0.0
 
 
 class SearchResponse(BaseModel):

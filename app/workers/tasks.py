@@ -199,6 +199,7 @@ def _normalize_eval_config(config: dict | None) -> dict:
         "expand_query": bool(config.get("expand_query", True)),
         "generate_answers": bool(config.get("generate_answers", False)),
         "use_ragas": bool(config.get("use_ragas", False)),
+        "feedback_learning": bool(config.get("feedback_learning", True)),
     }
 
 
@@ -1348,6 +1349,7 @@ def run_evaluation_task(
     """Run evaluation against an evaluation set."""
     from sqlalchemy import select
     from app.models.audit import EvaluationQuestion, EvaluationRun
+    from app.services.feedback_learning import load_feedback_weights
     from app.services.rag import retrieve_sources
     from app.services.rag_trace import trace_collector
 
@@ -1401,6 +1403,10 @@ def run_evaluation_task(
                 local_answer_relevancy = []
                 local_faithfulness = []
                 ragas_records = []
+                feedback_weights = None
+                if eval_config["feedback_learning"]:
+                    feedback_weights = await load_feedback_weights(session, org_id)
+                    metrics["feedback_weight_samples"] = feedback_weights.sample_count
 
                 for q in questions:
                     logger.debug(
@@ -1427,6 +1433,7 @@ def run_evaluation_task(
                         top_k=eval_config["top_k"],
                         expand_query=eval_config["expand_query"],
                         trace=trace,
+                        feedback_weights=feedback_weights,
                     )
                     logger.debug(
                         "Task run_evaluation question search complete task_id=%s run_id=%s question_id=%s source_count=%s",

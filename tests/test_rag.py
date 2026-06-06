@@ -6,11 +6,13 @@ from app.services.rag import (
     RAGSource,
     _clear_rag_caches,
     hybrid_search,
+    _retrieve_plan_sources,
     retrieve_sources,
     rerank_sources,
     build_context,
     assemble_context_and_generate,
 )
+from app.services.planner import QueryPlan
 
 
 def test_rag_source():
@@ -41,11 +43,17 @@ def test_rag_source_to_dict():
         page_end=None,
         score=0.9,
         content_preview="Preview",
+        vector_score=0.7,
+        bm25_score=0.3,
+        combined_score=0.8,
     )
     d = source.to_dict()
     assert d["chunk_id"] == "c1"
     assert d["document_id"] == "d1"
     assert d["score"] == 0.9
+    assert d["vector_score"] == 0.7
+    assert d["bm25_score"] == 0.3
+    assert d["combined_score"] == 0.8
     assert "content_preview" in d
 
 
@@ -245,6 +253,85 @@ def test_hybrid_search_with_results():
         assert results[0].page_start == 1
 
 
+def test_hybrid_search_returns_separate_component_scores():
+    org_id = str(uuid.uuid4())
+    kb_id = str(uuid.uuid4())
+    chunk_id = uuid.uuid4()
+
+    with patch("app.services.rag.get_client") as mock_client, \
+         patch("app.services.rag.embed_text") as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
+        mock_w = MagicMock()
+        mock_collection = MagicMock()
+        mock_w.collections.get = MagicMock(return_value=mock_collection)
+
+        mock_obj = MagicMock()
+        mock_obj.uuid = chunk_id
+        mock_obj.properties = {
+            "kb_id": kb_id,
+            "document_id": "doc-1",
+            "content": "Hybrid content",
+            "title": "Hybrid Document",
+        }
+        mock_obj.metadata = {"score": 0.85}
+
+        dense_obj = MagicMock()
+        dense_obj.uuid = chunk_id
+        dense_obj.metadata = {"distance": 0.25}
+
+        bm25_obj = MagicMock()
+        bm25_obj.uuid = chunk_id
+        bm25_obj.metadata = {"score": 0.42}
+
+        mock_collection.query.hybrid.return_value = MagicMock(objects=[mock_obj])
+        mock_collection.query.near_vector.return_value = MagicMock(objects=[dense_obj])
+        mock_collection.query.bm25.return_value = MagicMock(objects=[bm25_obj])
+        mock_client.return_value = mock_w
+
+        results = hybrid_search("test query", org_id, [kb_id], top_k=5)
+
+    assert len(results) == 1
+    assert results[0].hybrid_score == 0.85
+    assert abs(results[0].combined_score - 0.8) < 1e-6
+    assert results[0].vector_score == 0.75
+    assert results[0].bm25_score == 0.42
+
+
+def test_hybrid_search_fuses_metadata_results():
+    org_id = str(uuid.uuid4())
+    kb_id = str(uuid.uuid4())
+    metadata_chunk_id = uuid.uuid4()
+
+    with patch("app.services.rag.get_client") as mock_client, \
+         patch("app.services.rag.embed_text") as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
+        mock_w = MagicMock()
+        mock_collection = MagicMock()
+        mock_w.collections.get = MagicMock(return_value=mock_collection)
+
+        metadata_obj = MagicMock()
+        metadata_obj.uuid = metadata_chunk_id
+        metadata_obj.properties = {
+            "kb_id": kb_id,
+            "document_id": "doc-meta",
+            "content": "PD-1 metadata content",
+            "title": "Metadata Document",
+        }
+        metadata_obj.metadata = {"score": 0.0}
+
+        mock_collection.query.hybrid.return_value = MagicMock(objects=[])
+        mock_collection.query.near_vector.return_value = MagicMock(objects=[])
+        mock_collection.query.bm25.return_value = MagicMock(objects=[])
+        mock_collection.query.fetch_objects.return_value = MagicMock(objects=[metadata_obj])
+        mock_client.return_value = mock_w
+
+        results = hybrid_search("PD-1 adverse events", org_id, [kb_id], top_k=5)
+
+    assert len(results) == 1
+    assert results[0].document_id == "doc-meta"
+    assert results[0].metadata_score > 0
+
+
 def test_hybrid_search_reads_object_metadata_score():
     org_id = str(uuid.uuid4())
 
@@ -274,6 +361,68 @@ def test_hybrid_search_reads_object_metadata_score():
 
         assert len(results) == 1
         assert results[0].score == 0.72
+
+
+def test_hybrid_search_fallback_relaxes_kb_filter_when_zero_results():
+    org_id = str(uuid.uuid4())
+    kb_id = str(uuid.uuid4())
+
+    with patch("app.services.rag.get_client") as mock_client, \
+         patch("app.services.rag.embed_text") as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
+        mock_w = MagicMock()
+        mock_collection = MagicMock()
+        mock_w.collections.get = MagicMock(return_value=mock_collection)
+
+        fallback_obj = MagicMock()
+        fallback_obj.uuid = uuid.uuid4()
+        fallback_obj.properties = {
+            "kb_id": "other-kb",
+            "document_id": "doc-1",
+            "content": "Fallback content",
+            "title": "Fallback Document",
+        }
+        fallback_obj.metadata = {"score": 0.55}
+
+        mock_collection.query.hybrid.side_effect = [
+            MagicMock(objects=[]),
+            MagicMock(objects=[fallback_obj]),
+        ]
+        mock_collection.query.near_vector.return_value = MagicMock(objects=[])
+        mock_collection.query.bm25.return_value = MagicMock(objects=[])
+        mock_client.return_value = mock_w
+
+        results = hybrid_search("test query", org_id, [kb_id], top_k=5)
+
+    assert len(results) == 1
+    assert results[0].combined_score == 0.55
+    assert mock_collection.query.hybrid.call_count == 2
+
+
+def test_retrieve_plan_sources_runs_multiple_queries_and_deduplicates():
+    source_a = RAGSource("c1", "d1", "Doc1", None, None, None, 0.9, "first", combined_score=0.9)
+    source_b = RAGSource("c2", "d2", "Doc2", None, None, None, 0.8, "second", combined_score=0.8)
+    source_a_lower = RAGSource("c1", "d1", "Doc1", None, None, None, 0.1, "first", combined_score=0.1)
+    plan = QueryPlan(
+        original="q",
+        queries=["q", "sub query"],
+        enabled=True,
+        strategy="deterministic",
+        reason="decomposed",
+    )
+
+    with patch("app.services.rag.hybrid_search", side_effect=[[source_a], [source_a_lower, source_b]]) as mock_hybrid:
+        result = _retrieve_plan_sources(
+            plan=plan,
+            query="q",
+            org_id="org",
+            kb_ids=["kb"],
+            top_k=5,
+            expand_query=True,
+        )
+
+    assert mock_hybrid.call_count == 2
+    assert [source.chunk_id for source in result] == ["c1", "c2"]
 
 
 def test_hybrid_search_uses_retrieval_cache_for_repeated_query():

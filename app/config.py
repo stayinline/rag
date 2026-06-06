@@ -167,6 +167,19 @@ class Settings(BaseSettings):
     llm_query_rewrite: bool = _field(_root("LLM_QUERY_REWRITE", False), "LLM_QUERY_REWRITE")
     llm_query_rewrite_model: str = _field(_root("LLM_QUERY_REWRITE_MODEL", ""), "LLM_QUERY_REWRITE_MODEL")
     citation_min_score: float = _field(_root("CITATION_MIN_SCORE", 0.0), "CITATION_MIN_SCORE")
+    metadata_retrieval: bool = _field(_root("METADATA_RETRIEVAL", True), "METADATA_RETRIEVAL")
+    metadata_score_weight: float = _field(_root("METADATA_SCORE_WEIGHT", 0.2), "METADATA_SCORE_WEIGHT")
+    retrieval_vector_weight: float = _field(_root("RETRIEVAL_VECTOR_WEIGHT", 0.4), "RETRIEVAL_VECTOR_WEIGHT")
+    retrieval_bm25_weight: float = _field(_root("RETRIEVAL_BM25_WEIGHT", 0.3), "RETRIEVAL_BM25_WEIGHT")
+    retrieval_metadata_weight: float = _field(_root("RETRIEVAL_METADATA_WEIGHT", 0.2), "RETRIEVAL_METADATA_WEIGHT")
+    retrieval_hybrid_weight: float = _field(_root("RETRIEVAL_HYBRID_WEIGHT", 0.1), "RETRIEVAL_HYBRID_WEIGHT")
+    feedback_learning: bool = _field(_root("FEEDBACK_LEARNING", True), "FEEDBACK_LEARNING")
+    feedback_learning_window: int = _field(_root("FEEDBACK_LEARNING_WINDOW", 200), "FEEDBACK_LEARNING_WINDOW")
+    feedback_learning_cache_ttl: int = _field(
+        _root("FEEDBACK_LEARNING_CACHE_TTL", 300),
+        "FEEDBACK_LEARNING_CACHE_TTL",
+    )
+    feedback_rerank_strength: float = _field(_root("FEEDBACK_RERANK_STRENGTH", 0.15), "FEEDBACK_RERANK_STRENGTH")
 
     # Phase 3: Analytics & Quality
     clickhouse_url: str = _field(_clickhouse_url(), "CLICKHOUSE_URL")

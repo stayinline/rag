@@ -2,10 +2,13 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.database import get_db
 from app.logging_config import format_log_text
 from app.schemas.search import SearchRequest
+from app.services.feedback_learning import load_feedback_weights
 from app.services.rag import retrieve_sources
 
 logger = logging.getLogger(__name__)
@@ -16,6 +19,7 @@ router = APIRouter(prefix="/search", tags=["search"])
 async def search(
     data: SearchRequest,
     user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     start = time.monotonic()
     kb_ids = [str(kb) for kb in data.kb_ids]
@@ -29,12 +33,14 @@ async def search(
         len(data.query or ""),
         data.filters,
     )
+    feedback_weights = await load_feedback_weights(db, str(user["org_id"]))
     sources = retrieve_sources(
         query=data.query,
         org_id=str(user["org_id"]),
         kb_ids=kb_ids,
         top_k=data.top_k,
         expand_query=True,
+        feedback_weights=feedback_weights,
     )
 
     results = []
@@ -49,7 +55,10 @@ async def search(
             "content_preview": s.content_preview[:300],
             "vector_score": s.vector_score,
             "bm25_score": s.bm25_score,
-            "combined_score": s.score,
+            "combined_score": s.combined_score,
+            "metadata_score": s.metadata_score,
+            "feedback_score": s.feedback_score,
+            "hybrid_score": s.hybrid_score,
         })
 
     logger.info(

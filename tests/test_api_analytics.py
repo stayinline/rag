@@ -179,6 +179,21 @@ class TestAnalyticsAPI:
             data = resp.json()
             assert data["total_queries"] == 100
 
+    def test_feedback_weights(self, analytics_client):
+        """Test getting feedback-derived weights."""
+        weights = MagicMock()
+        weights.to_dict.return_value = {
+            "sample_count": 2,
+            "chunk_weights": {"c1": 1.0},
+            "document_weights": {"d1": -1.0},
+        }
+        with patch("app.api.v1.analytics.load_feedback_weights", AsyncMock(return_value=weights)):
+            resp = analytics_client.get("/api/v1/analytics/feedback-weights")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["sample_count"] == 2
+        assert data["chunk_weights"]["c1"] == 1.0
+
     def test_list_rag_traces(self, analytics_client):
         """Test listing RAG trace details."""
         trace_id = str(uuid.uuid4())

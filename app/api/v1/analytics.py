@@ -23,6 +23,7 @@ from app.schemas.analytics import (
     ZeroResultQueryItem,
     LowRatedAnswerResponse,
     LowRatedAnswerItem,
+    FeedbackWeightsResponse,
     RAGAnalyticsSummary,
     RAGTraceDetailResponse,
     RAGTraceListResponse,
@@ -30,6 +31,7 @@ from app.schemas.analytics import (
     AuditLogResponse,
 )
 from app.services.clickhouse import EMPTY_ANALYTICS_SUMMARY
+from app.services.feedback_learning import clear_feedback_weight_cache, load_feedback_weights
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,7 @@ async def submit_feedback(
     )
     db.add(feedback)
     await db.commit()
+    clear_feedback_weight_cache(org_id)
 
     from app.services.clickhouse import clickhouse_client
     await clickhouse_client.update_trace_rating(org_id, trace_id, data.rating)
@@ -397,6 +400,18 @@ async def get_analytics_summary(
     summary = await clickhouse_client.get_analytics_summary(org_id)
     logger.info("Get analytics summary complete org_id=%s user_id=%s keys=%s", org_id, user["user_id"], list(summary.keys()))
     return RAGAnalyticsSummary(**{**EMPTY_ANALYTICS_SUMMARY, **(summary or {})})
+
+
+@router.get("/analytics/feedback-weights", response_model=FeedbackWeightsResponse)
+async def get_feedback_weights(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current feedback-derived retrieval weights for the org."""
+    org_id = str(user["org_id"])
+    logger.info("Get feedback weights request org_id=%s user_id=%s", org_id, user["user_id"])
+    weights = await load_feedback_weights(db, org_id)
+    return FeedbackWeightsResponse(**weights.to_dict())
 
 
 # --- RAG Trace Details ---

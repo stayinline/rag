@@ -12,6 +12,7 @@ from app.services.citation_validator import validate_answer_citations
 from app.services.contextual_compression import compress_sources_for_query
 from app.services.embedding import embed_text
 from app.services.llm import generate_stream
+from app.services.planner import QueryPlan, build_query_plan
 from app.services.weaviate_client import COLLECTION_NAME, get_client
 from weaviate.classes.query import Filter, MetadataQuery
 from app.services.query_rewriter import ConversationalQueryRewriteResult, rewrite_conversational_query, rewrite_query
@@ -64,7 +65,9 @@ class RAGSource:
                  kb_id: str = "", child_chunk_ids: list[str] | None = None,
                  rank_before: int = 0, rank_after: int = 0,
                  vector_score: float = 0.0, bm25_score: float = 0.0,
-                 rerank_score: float = 0.0):
+                 rerank_score: float = 0.0, combined_score: float | None = None,
+                 metadata_score: float = 0.0, feedback_score: float = 0.0,
+                 hybrid_score: float = 0.0):
         content = content_preview or ""
         self.chunk_id = chunk_id
         self.document_id = document_id
@@ -86,6 +89,10 @@ class RAGSource:
         self.vector_score = vector_score
         self.bm25_score = bm25_score
         self.rerank_score = rerank_score
+        self.combined_score = score if combined_score is None else combined_score
+        self.metadata_score = metadata_score
+        self.feedback_score = feedback_score
+        self.hybrid_score = hybrid_score
 
     def clone(self) -> "RAGSource":
         return RAGSource(
@@ -108,6 +115,10 @@ class RAGSource:
             vector_score=self.vector_score,
             bm25_score=self.bm25_score,
             rerank_score=self.rerank_score,
+            combined_score=self.combined_score,
+            metadata_score=self.metadata_score,
+            feedback_score=self.feedback_score,
+            hybrid_score=self.hybrid_score,
         )
 
     def to_dict(self) -> dict:
@@ -130,6 +141,10 @@ class RAGSource:
             "rank_after": self.rank_after,
             "vector_score": self.vector_score,
             "bm25_score": self.bm25_score,
+            "combined_score": self.combined_score,
+            "metadata_score": self.metadata_score,
+            "feedback_score": self.feedback_score,
+            "hybrid_score": self.hybrid_score,
             "rerank_score": self.rerank_score,
         }
 
@@ -199,9 +214,24 @@ def _build_where_filter(org_id: str, kb_ids: list[str], security_levels: list[st
     return Filter.all_of(conditions)
 
 
-def _weaviate_to_source(obj, score: float) -> RAGSource:
+def _build_relaxed_where_filter(org_id: str) -> Filter:
+    """Build Weaviate filter without optional KB constraints for zero-result fallback."""
+    return _build_where_filter(org_id, [])
+
+
+def _weaviate_to_source(
+    obj,
+    score: float,
+    *,
+    vector_score: float = 0.0,
+    bm25_score: float = 0.0,
+    combined_score: float | None = None,
+    metadata_score: float = 0.0,
+    hybrid_score: float = 0.0,
+) -> RAGSource:
     """Convert a Weaviate result object to RAGSource."""
     props = obj.properties
+    combined = score if combined_score is None else combined_score
     return RAGSource(
         chunk_id=str(obj.uuid),
         document_id=props.get("document_id", ""),
@@ -217,8 +247,12 @@ def _weaviate_to_source(obj, score: float) -> RAGSource:
         chunk_index=props.get("chunk_index"),
         parent_chunk_id=props.get("parent_chunk_id"),
         child_chunk_ids=props.get("child_chunk_ids") or [],
-        vector_score=score,
+        vector_score=vector_score,
+        bm25_score=bm25_score,
         rerank_score=score,
+        combined_score=combined,
+        metadata_score=metadata_score,
+        hybrid_score=hybrid_score,
     )
 
 
@@ -228,6 +262,31 @@ def _metadata_score(metadata) -> float:
     if isinstance(metadata, dict):
         return metadata.get("score") or 0.0
     return getattr(metadata, "score", None) or 0.0
+
+
+def _metadata_distance(metadata) -> float | None:
+    if not metadata:
+        return None
+    value = metadata.get("distance") if isinstance(metadata, dict) else getattr(metadata, "distance", None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _vector_score_from_metadata(metadata) -> float:
+    distance = _metadata_distance(metadata)
+    if distance is None:
+        return _metadata_score(metadata)
+    return max(0.0, 1.0 - distance)
+
+
+def _score_map(objects) -> dict[str, float]:
+    return {str(obj.uuid): _metadata_score(obj.metadata) for obj in objects}
+
+
+def _vector_score_map(objects) -> dict[str, float]:
+    return {str(obj.uuid): _vector_score_from_metadata(obj.metadata) for obj in objects}
 
 
 def _score_for_log(score: Any) -> float:
@@ -264,12 +323,271 @@ def _summarize_source(source: RAGSource, preview_chars: int = 120) -> dict:
         "page_start": source.page_start,
         "page_end": source.page_end,
         "score": _score_for_log(source.score),
+        "vector_score": _score_for_log(source.vector_score),
+        "bm25_score": _score_for_log(source.bm25_score),
+        "combined_score": _score_for_log(source.combined_score),
+        "metadata_score": _score_for_log(source.metadata_score),
+        "feedback_score": _score_for_log(source.feedback_score),
+        "hybrid_score": _score_for_log(source.hybrid_score),
         "content_preview": format_log_text(source.content, preview_chars),
     }
 
 
 def _summarize_sources(sources: list[RAGSource], limit: int = 5, preview_chars: int = 120) -> list[dict]:
     return [_summarize_source(source, preview_chars) for source in sources[:limit]]
+
+
+def _response_objects(response) -> list:
+    objects = getattr(response, "objects", None)
+    if objects is None:
+        return []
+    if isinstance(objects, list):
+        return objects
+    if not isinstance(objects, tuple):
+        module_name = type(objects).__module__
+        if module_name.startswith("unittest.mock"):
+            return []
+    try:
+        return list(objects)
+    except TypeError:
+        return []
+
+
+def _fallback_top_k(top_k: int) -> int:
+    multiplier = int(getattr(settings, "rag_fallback_top_k_multiplier", 2) or 2)
+    return max(top_k + 1, top_k * max(multiplier, 1))
+
+
+def _query_hybrid_objects(collection, *, query: str, query_vector: list[float], where: Filter, limit: int) -> list:
+    response = collection.query.hybrid(
+        query=query,
+        vector=query_vector,
+        filters=where,
+        limit=limit,
+        alpha=0.5,
+        return_metadata=MetadataQuery(score=True),
+    )
+    return _response_objects(response)
+
+
+def _query_dense_objects(collection, *, query_vector: list[float], where: Filter, limit: int) -> list:
+    response = collection.query.near_vector(
+        near_vector=query_vector,
+        filters=where,
+        limit=limit,
+        return_metadata=MetadataQuery(score=True, distance=True),
+    )
+    return _response_objects(response)
+
+
+def _query_bm25_objects(collection, *, query: str, where: Filter, limit: int) -> list:
+    response = collection.query.bm25(
+        query=query,
+        filters=where,
+        limit=limit,
+        return_metadata=MetadataQuery(score=True),
+    )
+    return _response_objects(response)
+
+
+def _query_metadata_objects(collection, *, where: Filter, limit: int) -> list:
+    response = collection.query.fetch_objects(
+        filters=where,
+        limit=limit,
+        return_metadata=MetadataQuery(score=True),
+    )
+    return _response_objects(response)
+
+
+def _component_score_maps(
+    collection,
+    *,
+    query: str,
+    query_vector: list[float],
+    where: Filter,
+    limit: int,
+) -> tuple[dict[str, float], dict[str, float]]:
+    vector_scores: dict[str, float] = {}
+    bm25_scores: dict[str, float] = {}
+    try:
+        vector_scores = _vector_score_map(
+            _query_dense_objects(collection, query_vector=query_vector, where=where, limit=limit)
+        )
+    except Exception as exc:
+        logger.warning("Dense component score lookup failed: %s", exc, exc_info=True)
+    try:
+        bm25_scores = _score_map(_query_bm25_objects(collection, query=query, where=where, limit=limit))
+    except Exception as exc:
+        logger.warning("BM25 component score lookup failed: %s", exc, exc_info=True)
+    return vector_scores, bm25_scores
+
+
+def _metadata_filter_terms(query: str) -> list[str]:
+    rewrite_result = rewrite_query(query, expand_synonyms=False)
+    terms: list[str] = []
+    for values in rewrite_result.entities.values():
+        for value in values:
+            term = str(value).split("->")[-1].strip()
+            if term and term not in terms:
+                terms.append(term)
+    return terms
+
+
+def _metadata_where_filter(base_where: Filter, terms: list[str]) -> Filter | None:
+    if not terms:
+        return None
+    return Filter.all_of([
+        base_where,
+        Filter.any_of([
+            Filter.by_property("domain_tags").contains_any(terms),
+            Filter.by_property("entities").contains_any(terms),
+        ]),
+    ])
+
+
+def _normalized_score_map(scores: dict[str, float]) -> dict[str, float]:
+    if not scores:
+        return {}
+    max_score = max(abs(score) for score in scores.values())
+    if max_score <= 0:
+        return {key: 0.0 for key in scores}
+    return {key: max(score, 0.0) / max_score for key, score in scores.items()}
+
+
+def _combined_retrieval_score(
+    *,
+    vector_score: float,
+    bm25_score: float,
+    metadata_score: float,
+    hybrid_score: float,
+) -> float:
+    return (
+        float(getattr(settings, "retrieval_vector_weight", 0.4) or 0.0) * vector_score
+        + float(getattr(settings, "retrieval_bm25_weight", 0.3) or 0.0) * bm25_score
+        + float(getattr(settings, "retrieval_metadata_weight", 0.2) or 0.0) * metadata_score
+        + float(getattr(settings, "retrieval_hybrid_weight", 0.1) or 0.0) * hybrid_score
+    )
+
+
+def _fused_score_for_uuid(
+    obj_uuid: str,
+    *,
+    hybrid_scores: dict[str, float],
+    vector_scores: dict[str, float],
+    bm25_scores: dict[str, float],
+    metadata_scores: dict[str, float],
+    normalized_hybrid: dict[str, float],
+    normalized_vector: dict[str, float],
+    normalized_bm25: dict[str, float],
+    normalized_metadata: dict[str, float],
+) -> float:
+    if hybrid_scores and not vector_scores and not bm25_scores and not metadata_scores:
+        return hybrid_scores.get(obj_uuid, 0.0)
+    return _combined_retrieval_score(
+        vector_score=normalized_vector.get(obj_uuid, 0.0),
+        bm25_score=normalized_bm25.get(obj_uuid, 0.0),
+        metadata_score=normalized_metadata.get(obj_uuid, 0.0),
+        hybrid_score=normalized_hybrid.get(obj_uuid, 0.0),
+    )
+
+
+def _append_multi_index_sources(
+    *,
+    objects: list,
+    hybrid_scores: dict[str, float],
+    vector_scores: dict[str, float],
+    bm25_scores: dict[str, float],
+    metadata_scores: dict[str, float],
+    seen_ids: set[str],
+    all_results: list[RAGSource],
+) -> int:
+    normalized_vector = _normalized_score_map(vector_scores)
+    normalized_bm25 = _normalized_score_map(bm25_scores)
+    normalized_metadata = _normalized_score_map(metadata_scores)
+    normalized_hybrid = _normalized_score_map(hybrid_scores)
+
+    added_count = 0
+    for obj in objects:
+        obj_uuid = str(obj.uuid)
+        if obj_uuid in seen_ids:
+            continue
+        seen_ids.add(obj_uuid)
+        combined_score = _fused_score_for_uuid(
+            obj_uuid,
+            hybrid_scores=hybrid_scores,
+            vector_scores=vector_scores,
+            bm25_scores=bm25_scores,
+            metadata_scores=metadata_scores,
+            normalized_hybrid=normalized_hybrid,
+            normalized_vector=normalized_vector,
+            normalized_bm25=normalized_bm25,
+            normalized_metadata=normalized_metadata,
+        )
+        all_results.append(
+            _weaviate_to_source(
+                obj,
+                combined_score,
+                vector_score=vector_scores.get(obj_uuid, 0.0),
+                bm25_score=bm25_scores.get(obj_uuid, 0.0),
+                combined_score=combined_score,
+                metadata_score=metadata_scores.get(obj_uuid, 0.0),
+                hybrid_score=hybrid_scores.get(obj_uuid, 0.0),
+            )
+        )
+        added_count += 1
+    all_results.sort(key=lambda source: source.combined_score, reverse=True)
+    return added_count
+
+
+def _append_hybrid_sources(
+    *,
+    objects: list,
+    vector_scores: dict[str, float],
+    bm25_scores: dict[str, float],
+    seen_ids: set[str],
+    all_results: list[RAGSource],
+) -> int:
+    added_count = 0
+    for obj in objects:
+        obj_uuid = str(obj.uuid)
+        if obj_uuid in seen_ids:
+            continue
+        seen_ids.add(obj_uuid)
+        combined_score = _metadata_score(obj.metadata)
+        all_results.append(
+            _weaviate_to_source(
+                obj,
+                combined_score,
+                vector_score=vector_scores.get(obj_uuid, 0.0),
+                bm25_score=bm25_scores.get(obj_uuid, 0.0),
+                combined_score=combined_score,
+                hybrid_score=combined_score,
+            )
+        )
+        added_count += 1
+    return added_count
+
+
+def _append_dense_sources(*, objects: list, seen_ids: set[str], all_results: list[RAGSource]) -> int:
+    added_count = 0
+    for obj in objects:
+        obj_uuid = str(obj.uuid)
+        if obj_uuid in seen_ids:
+            continue
+        seen_ids.add(obj_uuid)
+        vector_score = _vector_score_from_metadata(obj.metadata)
+        all_results.append(
+            _weaviate_to_source(
+                obj,
+                vector_score,
+                vector_score=vector_score,
+                bm25_score=0.0,
+                combined_score=vector_score,
+                hybrid_score=0.0,
+            )
+        )
+        added_count += 1
+    return added_count
 
 
 def hybrid_search(
@@ -359,9 +677,11 @@ def hybrid_search(
     )
     collection = client.collections.get(COLLECTION_NAME)
     where = _build_where_filter(org_id, kb_ids)
+    relaxed_where = _build_relaxed_where_filter(org_id)
 
-    all_results = []
-    seen_ids = set()
+    all_results: list[RAGSource] = []
+    seen_ids: set[str] = set()
+    fallback_attempts: list[dict[str, Any]] = []
 
     for q in queries:
         query_vector, embedding_cache_hit, embedding_duration_ms = _embed_query(q)
@@ -386,26 +706,79 @@ def hybrid_search(
             )
 
         query_start = time.monotonic()
-        response = collection.query.hybrid(
+        objects = _query_hybrid_objects(
+            collection,
             query=q,
-            vector=query_vector,
-            filters=where,
+            query_vector=query_vector,
+            where=where,
             limit=top_k,
-            alpha=0.5,
-            return_metadata=MetadataQuery(score=True),
         )
         vector_search_duration_ms = (time.monotonic() - query_start) * 1000
+        dense_objects = _query_dense_objects(collection, query_vector=query_vector, where=where, limit=top_k)
+        bm25_objects = _query_bm25_objects(collection, query=q, where=where, limit=top_k)
+        metadata_terms = _metadata_filter_terms(q) if getattr(settings, "metadata_retrieval", True) else []
+        metadata_where = _metadata_where_filter(where, metadata_terms)
+        metadata_objects = (
+            _query_metadata_objects(collection, where=metadata_where, limit=top_k)
+            if metadata_where is not None
+            else []
+        )
+        hybrid_scores = _score_map(objects)
+        vector_scores = _vector_score_map(dense_objects)
+        bm25_scores = _score_map(bm25_objects)
+        metadata_weight = float(getattr(settings, "metadata_score_weight", 0.2) or 0.2)
+        metadata_scores = {str(obj.uuid): metadata_weight for obj in metadata_objects}
+        objects_by_id = {
+            str(obj.uuid): obj
+            for obj in [*objects, *dense_objects, *bm25_objects, *metadata_objects]
+        }
+        fused_objects = list(objects_by_id.values())
+        normalized_vector = _normalized_score_map(vector_scores)
+        normalized_bm25 = _normalized_score_map(bm25_scores)
+        normalized_metadata = _normalized_score_map(metadata_scores)
+        normalized_hybrid = _normalized_score_map(hybrid_scores)
         top_results = [
-            _weaviate_to_source(obj, _metadata_score(obj.metadata))
-            for obj in response.objects[:5]
+            _weaviate_to_source(
+                obj,
+                _fused_score_for_uuid(
+                    str(obj.uuid),
+                    hybrid_scores=hybrid_scores,
+                    vector_scores=vector_scores,
+                    bm25_scores=bm25_scores,
+                    metadata_scores=metadata_scores,
+                    normalized_hybrid=normalized_hybrid,
+                    normalized_vector=normalized_vector,
+                    normalized_bm25=normalized_bm25,
+                    normalized_metadata=normalized_metadata,
+                ),
+                vector_score=vector_scores.get(str(obj.uuid), 0.0),
+                bm25_score=bm25_scores.get(str(obj.uuid), 0.0),
+                combined_score=_fused_score_for_uuid(
+                    str(obj.uuid),
+                    hybrid_scores=hybrid_scores,
+                    vector_scores=vector_scores,
+                    bm25_scores=bm25_scores,
+                    metadata_scores=metadata_scores,
+                    normalized_hybrid=normalized_hybrid,
+                    normalized_vector=normalized_vector,
+                    normalized_bm25=normalized_bm25,
+                    normalized_metadata=normalized_metadata,
+                ),
+                metadata_score=metadata_scores.get(str(obj.uuid), 0.0),
+                hybrid_score=hybrid_scores.get(str(obj.uuid), 0.0),
+            )
+            for obj in fused_objects[:5]
         ]
         logger.info(
             "Hybrid search Weaviate query complete org_id=%s query=%r query_length=%s returned=%s "
-            "duration_ms=%.2f top_results=%s",
+            "dense_returned=%s bm25_returned=%s metadata_returned=%s duration_ms=%.2f top_results=%s",
             org_id,
             format_log_text(q, 300),
             len(q or ""),
-            len(response.objects),
+            len(objects),
+            len(dense_objects),
+            len(bm25_objects),
+            len(metadata_objects),
             vector_search_duration_ms,
             _summarize_sources(top_results),
         )
@@ -418,7 +791,13 @@ def hybrid_search(
                     "collection": COLLECTION_NAME,
                     "top_k": top_k,
                     "alpha": 0.5,
-                    "returned": len(response.objects),
+                    "returned": len(fused_objects),
+                    "mode": "multi_index",
+                    "hybrid_returned": len(objects),
+                    "dense_returned": len(dense_objects),
+                    "bm25_returned": len(bm25_objects),
+                    "metadata_returned": len(metadata_objects),
+                    "metadata_terms": metadata_terms,
                     "filter": {
                         "org_id": org_id,
                         "status": "ready",
@@ -427,12 +806,112 @@ def hybrid_search(
                     "top_results": _summarize_sources(top_results, preview_chars=180),
                 },
             )
-        for obj in response.objects:
-            obj_uuid = str(obj.uuid)
-            if obj_uuid not in seen_ids:
-                seen_ids.add(obj_uuid)
-                score = _metadata_score(obj.metadata)
-                all_results.append(_weaviate_to_source(obj, score))
+        _append_multi_index_sources(
+            objects=fused_objects,
+            hybrid_scores=hybrid_scores,
+            vector_scores=vector_scores,
+            bm25_scores=bm25_scores,
+            metadata_scores=metadata_scores,
+            seen_ids=seen_ids,
+            all_results=all_results,
+        )
+
+    if not all_results:
+        fallback_limit = _fallback_top_k(top_k)
+        for q in queries:
+            query_vector, embedding_cache_hit, embedding_duration_ms = _embed_query(q)
+            if trace:
+                trace.add_step(
+                    "embedding",
+                    duration_ms=embedding_duration_ms,
+                    details={
+                        "query": format_log_text(q, 500),
+                        "query_length": len(q or ""),
+                        "vector_dims": len(query_vector),
+                        "model": getattr(settings, "embedding_model", ""),
+                        "cache_hit": embedding_cache_hit,
+                        "fallback": True,
+                    },
+                )
+
+            fallback_specs = []
+            if kb_ids:
+                fallback_specs.append(("relaxed_filter_hybrid", "hybrid", relaxed_where, top_k))
+            fallback_specs.extend([
+                ("dense_only", "dense", where, top_k),
+                ("dense_only_expanded_top_k", "dense", where, fallback_limit),
+            ])
+            for attempt_name, mode, attempt_where, limit in fallback_specs:
+                query_start = time.monotonic()
+                if mode == "hybrid":
+                    objects = _query_hybrid_objects(
+                        collection,
+                        query=q,
+                        query_vector=query_vector,
+                        where=attempt_where,
+                        limit=limit,
+                    )
+                    vector_scores, bm25_scores = _component_score_maps(
+                        collection,
+                        query=q,
+                        query_vector=query_vector,
+                        where=attempt_where,
+                        limit=max(limit, len(objects)),
+                    ) if objects else ({}, {})
+                    added_count = _append_hybrid_sources(
+                        objects=objects,
+                        vector_scores=vector_scores,
+                        bm25_scores=bm25_scores,
+                        seen_ids=seen_ids,
+                        all_results=all_results,
+                    )
+                else:
+                    objects = _query_dense_objects(
+                        collection,
+                        query_vector=query_vector,
+                        where=attempt_where,
+                        limit=limit,
+                    )
+                    added_count = _append_dense_sources(
+                        objects=objects,
+                        seen_ids=seen_ids,
+                        all_results=all_results,
+                    )
+                attempt_duration_ms = (time.monotonic() - query_start) * 1000
+                filter_kb_ids = [] if attempt_where is relaxed_where else kb_ids
+                attempt_details = {
+                    "attempt": attempt_name,
+                    "mode": mode,
+                    "top_k": limit,
+                    "returned": len(objects),
+                    "added_count": added_count,
+                    "filter": {
+                        "org_id": org_id,
+                        "status": "ready",
+                        "kb_ids": filter_kb_ids,
+                    },
+                    "duration_ms": round(attempt_duration_ms, 2),
+                    "top_results": _summarize_sources(all_results, preview_chars=180),
+                }
+                fallback_attempts.append(attempt_details)
+                logger.info(
+                    "Hybrid search fallback attempt complete org_id=%s query=%r attempt=%s mode=%s "
+                    "top_k=%s returned=%s added=%s duration_ms=%.2f",
+                    org_id,
+                    format_log_text(q, 300),
+                    attempt_name,
+                    mode,
+                    limit,
+                    len(objects),
+                    added_count,
+                    attempt_duration_ms,
+                )
+                if trace:
+                    trace.add_step("search_fallback", details=attempt_details)
+                if all_results:
+                    break
+            if all_results:
+                break
 
     results = all_results[:top_k]
     _retrieval_cache.set(
@@ -448,6 +927,7 @@ def hybrid_search(
             details={
                 "retrieved_count": len(results),
                 "expanded_count": len(queries),
+                "fallback_attempts": fallback_attempts,
                 "top_results": _summarize_sources(results, preview_chars=180),
             },
         )
@@ -473,10 +953,15 @@ def retrieve_sources(
     expand_query: bool = True,
     top_n: int | None = None,
     trace: object = None,
+    feedback_weights: object = None,
 ) -> list[RAGSource]:
     """Run the shared retrieval path: optional expansion -> hybrid search -> rerank."""
     retrieval_top_k = max(top_k, int(getattr(settings, "rag_top_k", top_k) or top_k))
-    sources = hybrid_search(
+    plan = build_query_plan(query)
+    if trace:
+        trace.add_step("planner", details=plan.to_dict())
+    sources = _retrieve_plan_sources(
+        plan=plan,
         query=query,
         org_id=org_id,
         kb_ids=kb_ids,
@@ -486,14 +971,82 @@ def retrieve_sources(
     )
     for idx, source in enumerate(sources, start=1):
         source.rank_before = idx
-        source.vector_score = source.score
     reranked = rerank_sources(query, sources, top_n=top_n or top_k, trace=trace)
+    if feedback_weights is not None:
+        try:
+            from app.services.feedback_learning import apply_feedback_weights
+
+            reranked = apply_feedback_weights(reranked, feedback_weights)
+            if trace:
+                trace.add_step(
+                    "feedback_rerank",
+                    details={
+                        "sample_count": getattr(feedback_weights, "sample_count", 0),
+                        "source_count": len(reranked),
+                        "top_results": _summarize_sources(reranked, preview_chars=180),
+                    },
+                )
+        except Exception as exc:
+            logger.warning("Feedback rerank failed; preserving reranker order: %s", exc, exc_info=True)
     for idx, source in enumerate(reranked, start=1):
         source.rank_after = idx
         source.rerank_score = source.score
     expanded = expand_parent_child_context(reranked, trace=trace)
     _write_retrieval_hits_to_clickhouse(trace, expanded)
     return expanded
+
+
+def _retrieve_plan_sources(
+    *,
+    plan: QueryPlan,
+    query: str,
+    org_id: str,
+    kb_ids: list[str],
+    top_k: int,
+    expand_query: bool,
+    trace: object = None,
+) -> list[RAGSource]:
+    plan_queries = plan.queries or [query]
+    if len(plan_queries) == 1:
+        return hybrid_search(
+            query=plan_queries[0],
+            org_id=org_id,
+            kb_ids=kb_ids,
+            top_k=top_k,
+            expand_query=expand_query,
+            trace=trace,
+        )
+
+    merged: dict[str, RAGSource] = {}
+    per_query_top_k = max(top_k, int((top_k + len(plan_queries) - 1) / len(plan_queries)))
+    for idx, item in enumerate(plan_queries, start=1):
+        sub_sources = hybrid_search(
+            query=item,
+            org_id=org_id,
+            kb_ids=kb_ids,
+            top_k=per_query_top_k,
+            expand_query=expand_query,
+            trace=trace,
+        )
+        for source in sub_sources:
+            existing = merged.get(source.chunk_id)
+            if existing is None or source.combined_score > existing.combined_score:
+                source.plan_query = item
+                source.plan_query_index = idx
+                merged[source.chunk_id] = source
+
+    sources = sorted(merged.values(), key=lambda source: source.combined_score, reverse=True)[:top_k]
+    if trace:
+        trace.add_step(
+            "planner_merge",
+            details={
+                "query_count": len(plan_queries),
+                "merged_count": len(merged),
+                "returned": len(sources),
+                "top_results": _summarize_sources(sources, preview_chars=180),
+            },
+        )
+    return sources
 
 
 def expand_parent_child_context(sources: list[RAGSource], trace: object = None) -> list[RAGSource]:
@@ -853,6 +1406,7 @@ def assemble_context_and_generate(
     max_chunks: int = settings.rag_max_chunks,
     user_id: str = "",
     messages: list[dict] | None = None,
+    feedback_weights: object = None,
 ):
     """Full RAG pipeline: query rewrite -> search -> rerank -> context -> stream generate.
     Yields (delta, is_done, sources) dicts.
@@ -908,6 +1462,7 @@ def assemble_context_and_generate(
         top_k=max(max_chunks, getattr(settings, "reranker_top_n", max_chunks)),
         expand_query=True,
         trace=trace,
+        feedback_weights=feedback_weights,
     )
     logger.info(
         "RAG retrieval complete trace_id=%s source_count=%s top_results=%s",

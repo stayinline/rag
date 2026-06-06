@@ -16,9 +16,14 @@ def test_search_with_results(test_client):
         page_end=7,
         score=0.85,
         content_preview="The methods section describes...",
+        vector_score=0.7,
+        bm25_score=0.4,
+        combined_score=0.8,
     )
 
-    with patch("app.api.v1.search.retrieve_sources") as mock_search:
+    with patch("app.api.v1.search.retrieve_sources") as mock_search, \
+         patch("app.api.v1.search.load_feedback_weights") as mock_weights:
+        mock_weights.return_value = None
         mock_search.return_value = [source]
 
         resp = test_client.post(
@@ -33,10 +38,15 @@ def test_search_with_results(test_client):
     assert len(data["results"]) == 1
     assert data["results"][0]["document_title"] == "Test Document"
     assert data["results"][0]["section_path"] == "Methods"
+    assert data["results"][0]["vector_score"] == 0.7
+    assert data["results"][0]["bm25_score"] == 0.4
+    assert data["results"][0]["combined_score"] == 0.8
 
 
 def test_search_empty_results(test_client):
-    with patch("app.api.v1.search.retrieve_sources") as mock_search:
+    with patch("app.api.v1.search.retrieve_sources") as mock_search, \
+         patch("app.api.v1.search.load_feedback_weights") as mock_weights:
+        mock_weights.return_value = None
         mock_search.return_value = []
 
         resp = test_client.post(
@@ -53,7 +63,9 @@ def test_search_empty_results(test_client):
 
 def test_search_with_kb_filter(test_client):
     kb_id = str(uuid.uuid4())
-    with patch("app.api.v1.search.retrieve_sources") as mock_search:
+    with patch("app.api.v1.search.retrieve_sources") as mock_search, \
+         patch("app.api.v1.search.load_feedback_weights") as mock_weights:
+        mock_weights.return_value = None
         mock_search.return_value = []
 
         resp = test_client.post(
@@ -65,6 +77,7 @@ def test_search_with_kb_filter(test_client):
     call_args = mock_search.call_args
     assert kb_id in call_args[1]["kb_ids"]
     assert call_args[1]["expand_query"] is True
+    assert call_args[1]["feedback_weights"] is None
 
 
 def test_search_unauthorized():

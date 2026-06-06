@@ -16,6 +16,7 @@ from app.database import get_db
 from app.logging_config import format_log_text
 from app.models.conversation import Conversation, ConversationMessage
 from app.schemas.chat import ChatRequest, ChatStreamChunk
+from app.services.feedback_learning import load_feedback_weights
 from app.services.rag import assemble_context_and_generate
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ async def create_chat(
     conversation, history_messages = await _load_conversation_context(db, user, data)
     history_message_count = len(history_messages)
     llm_messages = _build_llm_history_messages(history_messages)
+    feedback_weights = await load_feedback_weights(db, str(user["org_id"]))
     logger.info(
         "Chat context prepared org_id=%s user_id=%s conversation_id=%s history_messages=%s llm_messages=%s",
         user["org_id"],
@@ -66,6 +68,7 @@ async def create_chat(
                     kb_ids=kb_ids,
                     user_id=str(user["user_id"]),
                     messages=llm_messages,
+                    feedback_weights=feedback_weights,
                 )
                 while True:
                     item = await anyio.to_thread.run_sync(_next_or_none, iterator)
@@ -134,6 +137,7 @@ async def create_chat(
             kb_ids=kb_ids,
             user_id=str(user["user_id"]),
             messages=llm_messages,
+            feedback_weights=feedback_weights,
         ):
             full_answer += item.get("delta", "")
             if item.get("done"):

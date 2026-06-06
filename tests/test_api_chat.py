@@ -3,6 +3,15 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def mock_feedback_loader():
+    with patch("app.api.v1.chat.load_feedback_weights") as mock:
+        mock.return_value = None
+        yield mock
+
 
 def test_chat_stream(test_client):
     with patch("app.api.v1.chat.assemble_context_and_generate") as mock_gen:

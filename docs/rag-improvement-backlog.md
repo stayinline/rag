@@ -64,7 +64,7 @@ flowchart LR
 |------|------|-------------|
 | 单一 DashScope embedding | 换模型无 re-embed 管线 | 多版本 embedding 共存 + 灰度迁移 |
 | 全租户共用一个 `KnowledgeChunk` 集合 | 大规模时难做隔离调优 | 按租户/KB/领域分集合或分片 |
-| `domain_tags` / `entities` 写入但未用于检索 | 元数据增强做了，检索没用上 | 元数据过滤 + boost + 多路召回 |
+| `domain_tags` / `entities` 已参与检索 | 元数据增强可作为第三路召回与融合分来源 | 后续可细化 per-domain boost |
 | BM25 依赖 Weaviate hybrid 内置 | 对中文分词、专有名词控制力弱 | 自建 sparse index（ES/BM25）+ 领域词典 |
 
 **相关文件：** `app/services/embedding.py`、`weaviate_client.py`、`app/workers/tasks.py`
@@ -82,9 +82,9 @@ flowchart LR
 | 仅 chunk_id 去重 | 同源文档多个 chunk 占满 top-k | MMR 多样性、文档级去重 |
 | search 与 chat 路径不一致 | search 无扩展、无重排 | 统一 Retrieval Service |
 | `write_retrieval_hit()` 从未调用 | 无法分析 rank 变化、cite 率 | 每次检索写 hit 事件，驱动迭代 |
-| 无降级策略 | 零结果直接失败 | 放宽 filter → dense-only → 扩大 top_k |
+| 已有零结果降级策略 | 主 hybrid 零结果后按 KB filter 放宽（有 kb_ids 时）、dense-only、扩大 top_k 尝试 | 后续可按场景配置降级顺序与阈值 |
 
-**search API 问题：** `vector_score`、`bm25_score`、`combined_score` 均填同一 `score`（`app/api/v1/search.py`）。
+**search API 分数字段：** `vector_score`、`bm25_score`、`combined_score` 已分别返回；`combined_score` 保留 Weaviate hybrid 总分。
 
 **相关文件：** `app/services/rag.py`、`reranker.py`、`app/api/v1/search.py`、`app/api/v1/chat.py`、`app/services/clickhouse.py`
 
@@ -96,8 +96,8 @@ flowchart LR
 |------|------|-------------|
 | 规则词典扩展（医学） | 覆盖面窄，扩展 query 无上限 | UMLS/MedDRA 或 LLM 改写 |
 | 对话历史拼接到检索 query | 简单字符串拼接，易污染 embedding | LLM 指代消解 / 独立 rewrite 步骤 |
-| `planner_mode=langgraph` 配置存在 | 无实现 | Query 路由、分解、HyDE、多跳检索 |
-| 无 query decomposition | 复合问题检索差 | 拆子问题 → 并行检索 → 融合 |
+| `planner_mode` 已接入确定性 planner | 当前无 LangGraph 运行时依赖，采用规则拆分与融合 | 后续可替换为 LangGraph/LLM planner |
+| Query decomposition 已落地 | 复合问题可拆子问题并多路检索融合 | 后续可补 HyDE、多跳推理 |
 
 **相关文件：** `app/services/query_rewriter.py`、`app/services/rag.py`（`_build_history_aware_query`）、`app/config.py`
 
@@ -138,7 +138,7 @@ flowchart LR
 |------|------|-------------|
 | recall@10（doc 级） | 非 chunk 级、非 MRR/NDCG | 标准 IR 指标 + chunk 级标注 |
 | 不用 `expected_answer` | 无法评答案质量 | RAGAS（faithfulness、answer relevancy） |
-| 用户反馈只存 rating | 未反哺检索/重排 | 点击/反馈 → 训练 reranker / 调权重 |
+| 用户反馈已反哺检索排序 | 从 rating + answer sources 生成在线权重，调整 rerank 后排序 | 后续可训练离线 LTR/reranker |
 | 无线上 A/B | 改 prompt/参数无法科学对比 | 实验平台 + 统计显著性 |
 | `retrieval_hit_events` 表无生产写入 | 无法分析精排前后变化 | 检索命中事件全量落库 |
 
@@ -168,16 +168,16 @@ flowchart LR
 | P1-4 | 端到端评测 | RAGAS + 检索 hit 事件写入 + 对齐线上检索链 | `tasks.py`、`clickhouse.py` |
 | P1-5 | 布局感知解析 | 表格、多栏 PDF 质量提升 | `file_parser.py`、`paper_parser.py` |
 | P1-6 | 论文章节 boost 参与检索 | `SECTION_BOOST` 写入 Weaviate 并用于打分 | `paper_chunker.py`、`rag.py` |
-| P1-7 | 检索降级策略 | 零结果时放宽 filter、切换 dense-only、扩大 top_k | `rag.py` |
-| P1-8 | 分离 search 分数字段 | `vector_score` / `bm25_score` / `combined_score` 分别返回 | `rag.py`、`search.py` |
+| P1-7 | 检索降级策略（已落地） | 零结果时放宽 filter、切换 dense-only、扩大 top_k | `rag.py` |
+| P1-8 | 分离 search 分数字段（已落地） | `vector_score` / `bm25_score` / `combined_score` 分别返回 | `rag.py`、`search.py` |
 
 ### P2 — 逼近大厂水平
 
 | # | 改进项 | 说明 | 主要涉及 |
 |---|--------|------|----------|
-| P2-1 | Query Decomposition + 多跳检索 | 落地 `planner_mode`，复合问题拆分并行检索 | 新建 planner service |
-| P2-2 | 反馈闭环训练 | 用户反馈驱动 rerank 权重或 LTR | `analytics.py`、评测/训练管线 |
-| P2-3 | 多向量/多索引策略 | dense + sparse + metadata 三路融合 | `rag.py`、索引层 |
+| P2-1 | Query Decomposition + 多跳检索（已落地基础版） | `planner_mode` 驱动确定性拆分，多查询检索后融合去重 | `planner.py`、`rag.py` |
+| P2-2 | 反馈闭环训练（已落地在线权重版） | 用户反馈驱动 rerank 权重；暂未实现离线 LTR 训练 | `feedback_learning.py`、`analytics.py`、`tasks.py` |
+| P2-3 | 多向量/多索引策略（已落地基础版） | dense + BM25 + metadata 三路召回融合 | `rag.py`、`weaviate_client.py` |
 | P2-4 | Agentic RAG | 检索 ↔ 推理 ↔ 再检索循环 | 新建 agent 层 |
 | P2-5 | 多格式文档接入 | HTML、PPT、Excel、Wiki 等 | `file_parser.py` |
 | P2-6 | Embedding 版本迁移 | 换模型时的 re-embed 与灰度切换 | `embedding.py`、`tasks.py` |
@@ -221,7 +221,6 @@ flowchart LR
 | 配置/文档 | 现状 |
 |-----------|------|
 | `reranker_type=bge`、`rerank_model_name` | 仅 BM25 / Mock 实现 |
-| `planner_mode=langgraph` | 无 planner 实现 |
 | `docs/technical-design-v2.md` 删除文档异步清理 Weaviate | 仅 PG 软删除 |
 | `rag_trace` 的 `citation` step | 声明但未记录 |
 | `retrieval_hit_events` ClickHouse 表 | API 存在，生产路径未写入 |
